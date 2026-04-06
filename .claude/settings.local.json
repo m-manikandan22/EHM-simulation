@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python test_flisr_ai.py)",
+      "Bash(python test_flisr_ai_fixed.py)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"from simulation.ems import EnergyManagementSystem; print\\('EMS module imports successfully'\\)\")",
+      "Bash(python:*)",
+      "Bash(findstr /n \"_calculate_flow_paths\")",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(1)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8000)",
+      "Bash(taskkill:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(pip show:*)",
+      "Bash(curl -s http://localhost:8000/api/state)",
+      "Bash(curl -s http://localhost:8000/state)",
+      "Bash(pkill -f \"python main.py\")",
+      "Bash(tee /tmp/backend.log)",
+      "Bash(curl -s -X POST http://localhost:8000/simulate)",
+      "Bash(npm run:*)",
+      "Bash(curl -s http://localhost:5173)"
+    ]
+  }
+}

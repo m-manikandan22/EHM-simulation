@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Powered Self-Healing Grid</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Main Grid Visualization */
+        .main-panel {
+            flex: 1;
+            position: relative;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+        }
+
+        .grid-canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Side Panel - Always Visible */
+        .side-panel {
+            width: 320px;
+            background: #1a1a24;
+            border-left: 1px solid #2d2d3a;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 16px;
+            background: #252532;
+            border-bottom: 1px solid #2d2d3a;
+        }
+
+        .panel-header h2 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .panel-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+
+        /* Status Cards */
+        .status-card {
+            background: #252532;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            border: 1px solid #2d2d3a;
+        }
+
+        .status-card h3 {
+            font-size: 12px;
+            color: #8b949e;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 4px 0;
+            font-size: 13px;
+        }
+
+        .metric-value {
+            font-family: 'Consolas', monospace;
+            color: #58a6ff;
+        }
+
+        .metric-value.good { color: #3fb950; }
+        .metric-value.warning { color: #d29922; }
+        .metric-value.critical { color: #f85149; }
+
+        /* AI Suggestions List */
+        .suggestion-item {
+            background: #21212c;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-left: 3px solid #58a6ff;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .suggestion-item:hover {
+            background: #2d2d3a;
+            transform: translateX(4px);
+        }
+
+        .suggestion-item.critical {
+            border-left-color: #f85149;
+        }
+
+        .suggestion-item.high {
+            border-left-color: #d29922;
+        }
+
+        .suggestion-title {
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .suggestion-desc {
+            font-size: 11px;
+            color: #8b949e;
+        }
+
+        /* Action Buttons */
+        .action-bar {
+            padding: 12px;
+            border-top: 1px solid #2d2d3a;
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #2ea043 0%, #3fb950 100%);
+        }
+
+        .btn-secondary {
+            background: #30363d;
+            color: #c9d1d9;
+        }
+
+        .btn-secondary:hover {
+            background: #3d444d;
+        }
+
+        .btn-ai {
+            background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%);
+            color: white;
+        }
+
+        .btn-ai:hover {
+            background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+        }
+
+        /* AI Assist Overlay */
+        .overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .overlay.active {
+            display: flex;
+        }
+
+        .overlay-content {
+            width: 800px;
+            max-height: 80vh;
+            background: #1a1a24;
+            border-radius: 12px;
+            border: 1px solid #2d2d3a;
+            overflow: hidden;
+        }
+
+        .overlay-header {
+            padding: 20px;
+            background: #252532;
+            border-bottom: 1px solid #2d2d3a;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .overlay-header h2 {
+            font-size: 18px;
+            color: #fff;
+        }
+
+        .ai-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%);
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .ai-badge::before {
+            content: "⚡";
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: #8b949e;
+            font-size: 24px;
+            cursor: pointer;
+        }
+
+        .close-btn:hover {
+            color: #fff;
+        }
+
+        .overlay-body {
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 60vh;
+        }
+
+        /* Score Visualization */
+        .score-breakdown {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin: 20px 0;
+        }
+
+        .score-item {
+            background: #21212c;
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .score-label {
+            font-size: 11px;
+            color: #8b949e;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .score-value {
+            font-size: 24px;
+            font-weight: 700;
+            font-family: 'Consolas', monospace;
+        }
+
+        .score-bar {
+            height: 4px;
+            background: #2d2d3a;
+            border-radius: 2px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+
+        .score-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.3s;
+        }
+
+        .score-bar-fill.resistance { background: #58a6ff; }
+        .score-bar-fill.voltage { background: #d29922; }
+        .score-bar-fill.switch { background: #a371f7; }
+        .score-bar-fill.priority { background: #3fb950; }
+
+        /* Switching Steps */
+        .switch-steps {
+            margin-top: 20px;
+        }
+
+        .step-item {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            margin-bottom: 8px;
+            background: #21212c;
+            border-radius: 6px;
+            border-left: 3px solid #58a6ff;
+        }
+
+        .step-number {
+            width: 24px;
+            height: 24px;
+            background: #58a6ff;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            margin-right: 12px;
+        }
+
+        .step-action {
+            font-weight: 600;
+            margin-right: 8px;
+        }
+
+        .step-target {
+            color: #58a6ff;
+            font-family: 'Consolas', monospace;
+            margin-right: 8px;
+        }
+
+        .step-reason {
+            color: #8b949e;
+            font-size: 12px;
+        }
+
+        /* Legend */
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(26, 26, 36, 0.95);
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #2d2d3a;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0;
+            font-size: 12px;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.source { background: #3fb950; }
+        .legend-dot.critical { background: #f85149; }
+        .legend-dot.high { background: #d29922; }
+        .legend-dot.normal { background: #58a6ff; }
+        .legend-dot.switch { background: #a371f7; }
+
+        /* Header */
+        .top-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 320px;
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(to bottom, rgba(10,10,15,0.9) 0%, transparent 100%);
+        }
+
+        .title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: rgba(63, 185, 80, 0.2);
+            border: 1px solid #3fb950;
+            border-radius: 20px;
+            font-size: 12px;
+            color: #3fb950;
+        }
+
+        .status-indicator::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            background: #3fb950;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .status-indicator.fault {
+            background: rgba(248, 81, 73, 0.2);
+            border-color: #f85149;
+            color: #f85149;
+        }
+
+        .status-indicator.fault::before {
+            background: #f85149;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Main Visualization Panel -->
+        <div class="main-panel">
+            <div class="top-bar">
+                <div class="title">⚡ Self-Healing Grid Simulation</div>
+                <div class="status-indicator" id="systemStatus">System Normal</div>
+            </div>
+
+            <canvas class="grid-canvas" id="gridCanvas"></canvas>
+
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-dot source"></div>
+                    <span>Power Source</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot critical"></div>
+                    <span>Critical Load (Hospital)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot high"></div>
+                    <span>High Priority (School)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot normal"></div>
+                    <span>Normal Load</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot switch"></div>
+                    <span>Switch/Tie Point</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Side Panel - Always Visible -->
+        <div class="side-panel">
+            <div class="panel-header">
+                <h2>📊 System Status</h2>
+            </div>
+
+            <div class="panel-content">
+                <!-- Grid Metrics -->
+                <div class="status-card">
+                    <h3>Grid Metrics</h3>
+                    <div class="metric-row">
+                        <span>Active Feeders</span>
+                        <span class="metric-value good">2</span>
+                    </div>
+                    <div class="metric-row">
+                        <span>Total Loads</span>
+                        <span class="metric-value">3</span>
+                    </div>
+                    <div class="metric-row">
+                        <span>Switch Count</span>
+                        <span class="metric-value">6</span>
+                    </div>
+                    <div class="metric-row">
+                        <span>Tie Lines</span>
+                        <span class="metric-value">1</span>
+                    </div>
+                </div>
+
+                <!-- AI Suggestions -->
+                <div class="status-card">
+                    <h3>🔮 AI Suggestions</h3>
+                    <div class="suggestion-item critical" onclick="showSuggestionDetails(0)">
+                        <div class="suggestion-title">Single Point of Failure</div>
+                        <div class="suggestion-desc">Node LOAD_A is critical - add tie line</div>
+                    </div>
+                    <div class="suggestion-item high" onclick="showSuggestionDetails(1)">
+                        <div class="suggestion-title">Switch Optimization</div>
+                        <div class="suggestion-desc">Consider tie-switch at LOAD_B</div>
+                    </div>
+                    <div class="suggestion-item" onclick="showSuggestionDetails(2)">
+                        <div class="suggestion-title">Load Balancing</div>
+                        <div class="suggestion-desc">Feeder F1 at 80% capacity</div>
+                    </div>
+                </div>
+
+                <!-- Priority Loads -->
+                <div class="status-card">
+                    <h3>Priority Loads</h3>
+                    <div class="metric-row">
+                        <span>Hospital</span>
+                        <span class="metric-value critical">CRITICAL</span>
+                    </div>
+                    <div class="metric-row">
+                        <span>School</span>
+                        <span class="metric-value warning">HIGH</span>
+                    </div>
+                    <div class="metric-row">
+                        <span>Residential</span>
+                        <span class="metric-value good">MEDIUM</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="action-bar">
+                <button class="btn btn-ai" onclick="showAIAssist()">🤖 AI Assist</button>
+                <button class="btn btn-secondary" onclick="simulateFault()">⚡ Simulate Fault</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Assist Overlay -->
+    <div class="overlay" id="aiOverlay">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2><span class="ai-badge">AI Powered</span> Restoration Analysis</h2>
+                <button class="close-btn" onclick="closeAIAssist()">×</button>
+            </div>
+            <div class="overlay-body">
+                <div id="restorationContent">
+                    <p style="color: #8b949e; text-align: center; padding: 40px;">
+                        Click "Simulate Fault" to see AI restoration analysis
+                    </p>
+                </div>
+            </div>
+            <div class="action-bar">
+                <button class="btn btn-primary" onclick="executeRestoration()">Execute Restoration</button>
+                <button class="btn btn-secondary" onclick="closeAIAssist()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Grid data structure
+        const gridData = {
+            nodes: [
+                { id: 'SOURCE_1', x: 100, y: 300, type: 'source', label: 'F1' },
+                { id: 'SOURCE_2', x: 700, y: 300, type: 'source', label: 'F2' },
+                { id: 'SW_1', x: 200, y: 300, type: 'switch', label: 'SW1' },
+                { id: 'SW_2', x: 300, y: 300, type: 'switch', label: 'SW2' },
+                { id: 'SW_3', x: 400, y: 300, type: 'switch', label: 'SW3' },
+                { id: 'SW_4', x: 600, y: 300, type: 'switch', label: 'SW4' },
+                { id: 'SW_5', x: 500, y: 300, type: 'switch', label: 'SW5' },
+                { id: 'LOAD_A', x: 300, y: 200, type: 'load', priority: 'critical', label: 'Hospital' },
+                { id: 'LOAD_B', x: 400, y: 400, type: 'load', priority: 'high', label: 'School' },
+                { id: 'LOAD_C', x: 500, y: 200, type: 'load', priority: 'normal', label: 'Residential' }
+            ],
+            edges: [
+                { from: 'SOURCE_1', to: 'SW_1', isSwitch: true },
+                { from: 'SW_1', to: 'SW_2', isSwitch: true },
+                { from: 'SW_2', to: 'LOAD_A', isSwitch: false },
+                { from: 'SW_2', to: 'SW_3', isSwitch: true },
+                { from: 'SW_3', to: 'LOAD_B', isSwitch: false },
+                { from: 'SOURCE_2', to: 'SW_4', isSwitch: true },
+                { from: 'SW_4', to: 'SW_5', isSwitch: true },
+                { from: 'SW_5', to: 'LOAD_C', isSwitch: false },
+                { from: 'SW_3', to: 'SW_5', isSwitch: true, isTie: true }
+            ],
+            fault: null,
+            restorationPath: null
+        };
+
+        // Canvas setup
+        const canvas = document.getElementById('gridCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+            drawGrid();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        function drawGrid() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw edges
+            gridData.edges.forEach(edge => {
+                const from = gridData.nodes.find(n => n.id === edge.from);
+                const to = gridData.nodes.find(n => n.id === edge.to);
+
+                ctx.beginPath();
+                ctx.moveTo(from.x, from.y);
+                ctx.lineTo(to.x, to.y);
+
+                if (gridData.fault &&
+                    ((edge.from === gridData.fault.from && edge.to === gridData.fault.to) ||
+                     (edge.from === gridData.fault.to && edge.to === gridData.fault.from))) {
+                    // Faulted line
+                    ctx.strokeStyle = '#f85149';
+                    ctx.lineWidth = 4;
+                    ctx.setLineDash([5, 5]);
+                } else if (gridData.restorationPath &&
+                    gridData.restorationPath.includes(edge.from) &&
+                    gridData.restorationPath.includes(edge.to)) {
+                    // Restoration path
+                    ctx.strokeStyle = '#3fb950';
+                    ctx.lineWidth = 4;
+                    ctx.setLineDash([]);
+                } else {
+                    // Normal line
+                    ctx.strokeStyle = edge.isTie ? '#a371f7' : '#30363d';
+                    ctx.lineWidth = edge.isTie ? 3 : 2;
+                    ctx.setLineDash(edge.isTie ? [10, 5] : []);
+                }
+
+                ctx.stroke();
+                ctx.setLineDash([]);
+            });
+
+            // Draw nodes
+            gridData.nodes.forEach(node => {
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, 12, 0, Math.PI * 2);
+
+                // Fill based on type
+                switch(node.type) {
+                    case 'source':
+                        ctx.fillStyle = '#3fb950';
+                        break;
+                    case 'switch':
+                        ctx.fillStyle = '#a371f7';
+                        break;
+                    case 'load':
+                        if (node.priority === 'critical') ctx.fillStyle = '#f85149';
+                        else if (node.priority === 'high') ctx.fillStyle = '#d29922';
+                        else ctx.fillStyle = '#58a6ff';
+                        break;
+                }
+
+                ctx.fill();
+
+                // Border
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Label
+                ctx.fillStyle = '#fff';
+                ctx.font = '11px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(node.label, node.x, node.y);
+            });
+        }
+
+        let currentFault = null;
+        let restorationPlan = null;
+
+        function simulateFault() {
+            // Simulate fault between SW_2 and LOAD_A
+            currentFault = { from: 'SW_2', to: 'LOAD_A' };
+            gridData.fault = currentFault;
+
+            document.getElementById('systemStatus').textContent = '⚠ FAULT DETECTED';
+            document.getElementById('systemStatus').classList.add('fault');
+
+            // Generate restoration plan
+            generateRestorationPlan();
+            drawGrid();
+
+            // Show AI overlay
+            showAIAssist();
+        }
+
+        function generateRestorationPlan() {
+            // Simulated AI calculation with normalized scoring
+            restorationPlan = {
+                faultLocation: 'SW_2 → LOAD_A',
+                isolatedLoads: ['LOAD_A'],
+                restorationPath: ['SOURCE_2', 'SW_4', 'SW_5', 'SW_3', 'SW_2', 'LOAD_A'],
+                sourceFeeder: 'F2',
+                metrics: {
+                    R_norm: 0.45,
+                    V_norm: 0.32,
+                    S_norm: 0.60,
+                    P_norm: 1.00,  // Critical hospital priority
+                    finalScore: 0.32
+                },
+                switchingSteps: [
+                    { action: 'CLOSE', target: 'TIE_1', reason: 'Connect alternate feeder F2 to isolated section' },
+                    { action: 'VERIFY', target: 'LOAD_A', reason: 'Confirm hospital power restored' }
+                ],
+                alternatives: 2
+            };
+
+            gridData.restorationPath = restorationPlan.restorationPath;
+        }
+
+        function showAIAssist() {
+            const overlay = document.getElementById('aiOverlay');
+            overlay.classList.add('active');
+
+            if (restorationPlan) {
+                const content = document.getElementById('restorationContent');
+                content.innerHTML = `
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="color: #f85149; margin-bottom: 10px;">⚠ Fault Detected</h3>
+                        <p style="color: #8b949e;">Location: <code>${restorationPlan.faultLocation}</code></p>
+                        <p style="color: #8b949e;">Isolated Load: <span style="color: #f85149;">Hospital (CRITICAL)</span></p>
+                    </div>
+
+                    <div class="score-breakdown">
+                        <div class="score-item">
+                            <div class="score-label">Resistance (35%)</div>
+                            <div class="score-value" style="color: #58a6ff;">${(restorationPlan.metrics.R_norm * 100).toFixed(0)}%</div>
+                            <div class="score-bar">
+                                <div class="score-bar-fill resistance" style="width: ${restorationPlan.metrics.R_norm * 100}%"></div>
+                            </div>
+                        </div>
+                        <div class="score-item">
+                            <div class="score-label">Voltage Drop (25%)</div>
+                            <div class="score-value" style="color: #d29922;">${(restorationPlan.metrics.V_norm * 100).toFixed(0)}%</div>
+                            <div class="score-bar">
+                                <div class="score-bar-fill voltage" style="width: ${restorationPlan.metrics.V_norm * 100}%"></div>
+                            </div>
+                        </div>
+                        <div class="score-item">
+                            <div class="score-label">Switches (25%)</div>
+                            <div class="score-value" style="color: #a371f7;">${(restorationPlan.metrics.S_norm * 100).toFixed(0)}%</div>
+                            <div class="score-bar">
+                                <div class="score-bar-fill switch" style="width: ${restorationPlan.metrics.S_norm * 100}%"></div>
+                            </div>
+                        </div>
+                        <div class="score-item">
+                            <div class="score-label">Priority (-15%)</div>
+                            <div class="score-value" style="color: #3fb950;">${(restorationPlan.metrics.P_norm * 100).toFixed(0)}%</div>
+                            <div class="score-bar">
+                                <div class="score-bar-fill priority" style="width: ${restorationPlan.metrics.P_norm * 100}%"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="background: #21212c; padding: 16px; border-radius: 8px; margin: 20px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: #8b949e;">Optimized Score:</span>
+                            <span style="font-size: 32px; font-weight: 700; color: #3fb950;">${restorationPlan.metrics.finalScore.toFixed(3)}</span>
+                        </div>
+                        <p style="color: #8b949e; font-size: 12px; margin-top: 8px;">
+                            Lower is better. Priority bonus applied for critical load.
+                        </p>
+                    </div>
+
+                    <div>
+                        <h4 style="margin-bottom: 12px;">Restoration Path: ${restorationPlan.restorationPath.join(' → ')}</h4>
+                        <h4 style="margin-bottom: 12px;">Source: Feeder ${restorationPlan.sourceFeeder}</h4>
+                    </div>
+
+                    <div class="switch-steps">
+                        <h4 style="margin-bottom: 12px;">Recommended Actions:</h4>
+                        ${restorationPlan.switchingSteps.map((step, i) => `
+                            <div class="step-item">
+                                <div class="step-number">${i + 1}</div>
+                                <span class="step-action">${step.action}</span>
+                                <span class="step-target">${step.target}</span>
+                                <span class="step-reason">— ${step.reason}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <p style="color: #8b949e; font-size: 12px; margin-top: 16px;">
+                        Alternative paths available: ${restorationPlan.alternatives}
+                    </p>
+                `;
+            }
+        }
+
+        function closeAIAssist() {
+            document.getElementById('aiOverlay').classList.remove('active');
+        }
+
+        function executeRestoration() {
+            alert('Restoration sequence executed! Hospital power restored via Feeder F2.');
+
+            // Reset
+            currentFault = null;
+            restorationPlan = null;
+            gridData.fault = null;
+            gridData.restorationPath = null;
+
+            document.getElementById('systemStatus').textContent = 'System Normal';
+            document.getElementById('systemStatus').classList.remove('fault');
+
+            closeAIAssist();
+            drawGrid();
+        }
+
+        function showSuggestionDetails(index) {
+            const suggestions = [
+                'Node LOAD_A is an articulation point. Adding a tie-switch to Feeder F2 would eliminate this single point of failure.',
+                'Load_B (School) could benefit from tie-switch access to Feeder F2 for redundancy.',
+                'Consider load shedding or redistribution to prevent overload on Feeder F1.'
+            ];
+            alert(suggestions[index]);
+        }
+
+        // Initialize
+        resizeCanvas();
+    </script>
+</body>
+</html>

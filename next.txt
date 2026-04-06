@@ -1,0 +1,171 @@
+நண்பா — I carefully analyzed your entire system (especially ), and I can clearly see:
+
+❗ Your backend logic is already strong
+❗ Your frontend rendering is static + segmented (not flow-based)
+
+👉 So the problem is 100% in index.html → drawGrid() logic, NOT in AI or backend.
+
+🧠 WHAT YOU HAVE NOW (PROBLEM)
+
+From your file:
+
+In drawGrid():
+Edges → drawn as lines  
+Nodes → drawn as circles  
+Fault → color change  
+Reroute → color change
+
+👉 That means:
+
+❌ You are only coloring edges
+❌ NOT showing energy movement
+
+🎯 WHAT YOU NEED (TARGET)
+
+You need:
+
+Continuous animated flow:
+Generator → Substation → Grid → Load
+
+NOT:
+
+Static colored lines
+🚀 EXACT IMPLEMENTATION PLAN (BASED ON YOUR CODE)
+🔥 STEP 1 — ADD FLOW DATA TO FRONTEND
+Update gridData:
+gridData.flowPaths = []
+When restoration happens:
+gridData.flowPaths = restorationPlan.path
+
+Example:
+
+[
+  "SOURCE_2",
+  "SW_4",
+  "SW_5",
+  "SW_3",
+  "SW_2",
+  "LOAD_A"
+]
+🔥 STEP 2 — MODIFY drawGrid() (MAIN CHANGE)
+❌ CURRENT (from your file)
+ctx.beginPath()
+ctx.moveTo(x1, y1)
+ctx.lineTo(x2, y2)
+ctx.stroke()
+
+👉 Only draws lines
+
+✅ ADD THIS AFTER DRAWING EDGES
+🔥 STEP 3 — ADD FLOW ANIMATION FUNCTION
+
+Add BELOW drawGrid():
+
+function animateFlow(path) {
+    if (!path || path.length < 2) return;
+
+    let progress = (Date.now() % 2000) / 2000; // loop 2 sec
+
+    for (let i = 0; i < path.length - 1; i++) {
+        const from = gridData.nodes[path[i]];
+        const to = gridData.nodes[path[i + 1]];
+
+        const x = from.x + (to.x - from.x) * progress;
+        const y = from.y + (to.y - from.y) * progress;
+
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = "#00f"; // blue flow
+        ctx.fill();
+    }
+}
+🔥 STEP 4 — CALL ANIMATION IN DRAW LOOP
+
+Inside drawGrid() (VERY IMPORTANT):
+
+if (gridData.flowPaths) {
+    animateFlow(gridData.flowPaths);
+}
+🔥 STEP 5 — MAKE IT CONTINUOUS (LOOP)
+
+Add:
+
+function animate() {
+    drawGrid();
+    requestAnimationFrame(animate);
+}
+animate();
+
+👉 Now:
+
+animation runs continuously
+
+🔥 STEP 6 — STOP FLOW ON FAULT (CRITICAL)
+
+In simulateFault():
+
+gridData.flowPaths = []
+
+👉 So:
+
+animation stops immediately
+🔥 STEP 7 — RESUME FLOW AFTER REROUTE
+
+In generateRestorationPlan():
+
+gridData.flowPaths = restorationPlan.path
+
+👉 So:
+
+animation follows NEW path
+🔥 STEP 8 — MULTI-SOURCE FLOW (OPTIONAL UPGRADE)
+
+Later you can:
+
+gridData.flowPaths = [
+   ["Solar", "S_MAIN", "P1", "H1"],
+   ["Battery", "S_MAIN", "P2", "H2"]
+]
+🔥 STEP 9 — VISUAL UPGRADE (IMPORTANT FOR JUDGE)
+
+Change color based on source:
+
+ctx.fillStyle = "#FFD700"; // solar
+ctx.fillStyle = "#00BFFF"; // wind
+ctx.fillStyle = "#FF00FF"; // battery
+🔥 STEP 10 — CUT EDGE VISUAL (YOU ASKED THIS)
+
+Already in your code:
+
+if (fault) → red dashed line
+ADD THIS:
+if (fault affects path) {
+    stop animation
+}
+🧠 FINAL RESULT AFTER THIS UPDATE
+BEFORE
+static grid ❌
+no energy movement ❌
+reroute not visible ❌
+AFTER
+continuous energy flow ✔️
+stops at fault ✔️
+reroutes visibly ✔️
+AI decisions clearly shown ✔️
+🎯 WHAT JUDGE WILL SEE
+Energy flowing continuously
+Fault → flow stops
+AI acts
+Flow resumes via new path
+
+👉 This is exactly what they expect
+
+🏁 FINAL TRUTH
+
+👉 Your system was already:
+
+technically strong
+
+👉 After this fix:
+
+🔥 visually convincing + demo-ready

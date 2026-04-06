@@ -1,0 +1,17 @@
+{
+  "pythonVersion": "3.9",
+  "pythonPlatform": "Windows",
+  "include": ["."],
+  "exclude": ["__pycache__"],
+  "extraPaths": ["."],
+  "venvPath": ".",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none",
+  "reportGeneralTypeIssues": "warning",
+  "reportOperatorIssue": "none",
+  "reportIndexIssue": "none",
+  "reportArgumentType": "none",
+  "reportCallIssue": "none",
+  "useLibraryCodeForTypes": true
+}

@@ -1,0 +1,15 @@
+{
+  "executionEnvironments": [
+    {
+      "root": "backend",
+      "extraPaths": ["backend"]
+    }
+  ],
+  "extraPaths": ["backend"],
+  "typeCheckingMode": "off",
+  "reportMissingImports": "none",
+  "reportGeneralTypeIssues": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOperatorIssue": "none",
+  "reportCallIssue": "none"
+}
