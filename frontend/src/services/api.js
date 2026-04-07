@@ -1,11 +1,12 @@
 /**
  * api.js — Axios service layer for the Smart Grid backend API.
- * All calls go to http://localhost:8000 (FastAPI).
+ * Uses Vite proxy to connect to backend (http://localhost:8000)
  */
 
 import axios from 'axios'
 
-const BASE_URL = 'http://localhost:8000'
+// Use '/api' to route through Vite proxy (defined in vite.config.js)
+const BASE_URL = '/api'
 
 const api = axios.create({
   baseURL: BASE_URL,

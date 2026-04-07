@@ -1,171 +1,193 @@
-நண்பா — I carefully analyzed your entire system (especially ), and I can clearly see:
+Your architecture is 80% correct
+👉 But 3 critical mismatches are breaking your system:
 
-❗ Your backend logic is already strong
-❗ Your frontend rendering is static + segmented (not flow-based)
+🚨 THE REAL PROBLEMS (from YOUR code)
+❌ PROBLEM 1: FLOW ≠ TOPOLOGY (Core bug)
 
-👉 So the problem is 100% in index.html → drawGrid() logic, NOT in AI or backend.
+In your backend:
 
-🧠 WHAT YOU HAVE NOW (PROBLEM)
+Flow is computed using BFS in grid.py
+But graph is still UNDIRECTED
+self.graph = nx.Graph()
+🔴 Result:
+Power direction is not respected
+Upstream nodes (LA0_1) get affected when downstream fails
+Wrong cluster detection
+✅ FIX 1 — MAKE FLOW DIRECTIONAL
+🔧 Replace in grid.py
+self.graph = nx.DiGraph()
+🔧 When adding edges:
+self.graph.add_edge(u, v, ...)
+self.graph.add_edge(v, u, ...)  # optional reverse but controlled
+🔧 CRITICAL: FLOW TREE
 
-From your file:
+Inside _simulate_energy_flow():
 
-In drawGrid():
-Edges → drawn as lines  
-Nodes → drawn as circles  
-Fault → color change  
-Reroute → color change
+tree = nx.bfs_tree(self.graph, source="S_MAIN")
+🔧 FAILURE PROPAGATION FIX
+failed_nodes = nx.descendants(self.graph, failed_node)
 
-👉 That means:
+👉 This alone fixes:
 
-❌ You are only coloring edges
-❌ NOT showing energy movement
+❌ LA0_1 wrongly failing
+❌ incorrect failure count
+❌ broken rerouting logic
+🚨 PROBLEM 2: FLISR is NOT CLUSTER-BASED
 
-🎯 WHAT YOU NEED (TARGET)
+Your SCADA:
 
-You need:
+_flisr_restore()
 
-Continuous animated flow:
-Generator → Substation → Grid → Load
+But it is still working like:
 
-NOT:
+👉 “try path → fail → shed”
 
-Static colored lines
-🚀 EXACT IMPLEMENTATION PLAN (BASED ON YOUR CODE)
-🔥 STEP 1 — ADD FLOW DATA TO FRONTEND
-Update gridData:
-gridData.flowPaths = []
-When restoration happens:
-gridData.flowPaths = restorationPlan.path
+❌ Missing:
+cluster detection
+segment isolation
+boundary switches
+✅ FIX 2 — REAL FLISR (must update)
+🔧 Add cluster detection in scada.py
+def find_isolated_clusters(graph):
+    active_edges = [(u,v) for u,v,d in graph.edges(data=True) if d.get("active", True)]
+    subgraph = graph.edge_subgraph(active_edges).copy()
+    return list(nx.connected_components(subgraph))
+🔧 For each cluster:
+for cluster in clusters:
+    if not has_source(cluster):
+        try_reroute(cluster)
+🔧 WHY?
 
-Example:
+Right now:
 
-[
-  "SOURCE_2",
-  "SW_4",
-  "SW_5",
-  "SW_3",
-  "SW_2",
-  "LOAD_A"
-]
-🔥 STEP 2 — MODIFY drawGrid() (MAIN CHANGE)
-❌ CURRENT (from your file)
-ctx.beginPath()
-ctx.moveTo(x1, y1)
-ctx.lineTo(x2, y2)
-ctx.stroke()
+👉 Entire feeder dies
+Instead of
+👉 Only one segment isolating
 
-👉 Only draws lines
+🚨 PROBLEM 3: ANIMATION IS STILL NOT TRUE FLOW
 
-✅ ADD THIS AFTER DRAWING EDGES
-🔥 STEP 3 — ADD FLOW ANIMATION FUNCTION
+In your frontend:
 
-Add BELOW drawGrid():
+buildRoutes()
 
-function animateFlow(path) {
-    if (!path || path.length < 2) return;
+👉 ❌ This is WRONG MODEL
 
-    let progress = (Date.now() % 2000) / 2000; // loop 2 sec
+You already fixed backend to edge-based
+But frontend still thinks in “routes”
 
-    for (let i = 0; i < path.length - 1; i++) {
-        const from = gridData.nodes[path[i]];
-        const to = gridData.nodes[path[i + 1]];
+✅ FIX 3 — PURE EDGE FLOW (IMPORTANT)
+🔥 REMOVE this completely:
+buildRoutes()
+🔧 USE THIS INSTEAD
+const edgesWithFlow = edges.filter(e => Math.abs(e.flow) > 0.01)
 
-        const x = from.x + (to.x - from.x) * progress;
-        const y = from.y + (to.y - from.y) * progress;
+edgesWithFlow.forEach(edge => {
+  spawnParticles(edge)
+})
+🔧 PARTICLE DIRECTION
+const direction = edge.flow > 0 ? 1 : -1
 
-        ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = "#00f"; // blue flow
-        ctx.fill();
-    }
+👉 This ensures:
+
+flow splits ✔️
+multi-path visible ✔️
+rerouting visible ✔️
+🚨 PROBLEM 4: GREEN FLOW STILL EXISTS
+
+Your system clearly still has:
+
+👉 OLD animation + NEW animation
+
+✅ FIX 4 — DELETE OLD FLOW
+
+Search in:
+
+GridGraph.jsx
+index.css
+❌ REMOVE:
+.green-flow
+power-flow
+old-flow
+✔ KEEP ONLY:
+.flow-particle {
+  animation: moveFlow linear infinite;
 }
-🔥 STEP 4 — CALL ANIMATION IN DRAW LOOP
+🚨 PROBLEM 5: EMS IS CORRECT BUT VISUALLY INVISIBLE
 
-Inside drawGrid() (VERY IMPORTANT):
+Your EMS is actually very strong:
 
-if (gridData.flowPaths) {
-    animateFlow(gridData.flowPaths);
+PyPSA optimization ✔
+partial absorption ✔
+❌ But problem:
+
+👉 UI does NOT show:
+
+battery discharge direction
+solar reverse flow
+storage interaction
+✅ FIX 5 — ADD FLOW SOURCE COLOR
+
+In GridGraph.jsx:
+
+function getFlowColor(source_type) {
+  switch(source_type){
+    case "solar": return "#eab308"
+    case "wind": return "#38bdf8"
+    case "battery": return "#a855f7"
+    case "coal": return "#ef4444"
+    default: return "#3b82f6"
+  }
 }
-🔥 STEP 5 — MAKE IT CONTINUOUS (LOOP)
+Apply:
+particle.style.fill = getFlowColor(edge.source_type)
+🚨 PROBLEM 6: PIPELINE ORDER IS STILL PARTIALLY WRONG
 
-Add:
+You wrote:
 
-function animate() {
-    drawGrid();
-    requestAnimationFrame(animate);
-}
-animate();
+grid.update_generation()
+ems.run()
+grid.update_power_flow()
+scada.execute()
 
-👉 Now:
+⚠️ Issue:
 
-animation runs continuously
+👉 EMS runs BEFORE physics flow
+👉 But EMS depends on imbalance AFTER flow
 
-🔥 STEP 6 — STOP FLOW ON FAULT (CRITICAL)
+✅ FIX 6 — CORRECT PIPELINE
+# 1. Generation
+grid.update_generation()
 
-In simulateFault():
+# 2. Physics FIRST
+grid.update_power_flow()
 
-gridData.flowPaths = []
+# 3. EMS reacts
+ems.run(grid)
 
-👉 So:
+# 4. SCADA
+scada.execute_control_loop()
 
-animation stops immediately
-🔥 STEP 7 — RESUME FLOW AFTER REROUTE
+👉 This is real CPS order
 
-In generateRestorationPlan():
-
-gridData.flowPaths = restorationPlan.path
-
-👉 So:
-
-animation follows NEW path
-🔥 STEP 8 — MULTI-SOURCE FLOW (OPTIONAL UPGRADE)
-
-Later you can:
-
-gridData.flowPaths = [
-   ["Solar", "S_MAIN", "P1", "H1"],
-   ["Battery", "S_MAIN", "P2", "H2"]
-]
-🔥 STEP 9 — VISUAL UPGRADE (IMPORTANT FOR JUDGE)
-
-Change color based on source:
-
-ctx.fillStyle = "#FFD700"; // solar
-ctx.fillStyle = "#00BFFF"; // wind
-ctx.fillStyle = "#FF00FF"; // battery
-🔥 STEP 10 — CUT EDGE VISUAL (YOU ASKED THIS)
-
-Already in your code:
-
-if (fault) → red dashed line
-ADD THIS:
-if (fault affects path) {
-    stop animation
-}
-🧠 FINAL RESULT AFTER THIS UPDATE
-BEFORE
-static grid ❌
-no energy movement ❌
-reroute not visible ❌
-AFTER
-continuous energy flow ✔️
-stops at fault ✔️
-reroutes visibly ✔️
-AI decisions clearly shown ✔️
-🎯 WHAT JUDGE WILL SEE
-Energy flowing continuously
-Fault → flow stops
-AI acts
-Flow resumes via new path
-
-👉 This is exactly what they expect
-
-🏁 FINAL TRUTH
-
-👉 Your system was already:
-
-technically strong
-
-👉 After this fix:
-
-🔥 visually convincing + demo-ready
+🎯 WHAT YOU WILL GET AFTER FIX
+BEFORE ❌
+wrong failures
+no rerouting
+ugly animation
+no flow realism
+AFTER ✅
+✔ only downstream failure
+✔ intelligent rerouting
+✔ visible energy splitting
+✔ storage usage visible
+✔ real-world grid behavior
+🚀 FINAL PRIORITY ORDER (DO THIS NOW)
+🔥 MUST DO (critical)
+Convert graph → DiGraph
+Fix descendants logic
+Remove buildRoutes()
+Fix pipeline order
+⚡ NEXT
+Add cluster-based FLISR
+Remove green animation
+Add flow color logic

@@ -128,15 +128,15 @@ def simulate_step(request: Request) -> dict:
         # ── 1. Calculate generation (solar + wind) ──
         grid.update_generation()
 
-        # ── 2. EMS balances (battery charge/discharge + priority allocation) ──
-        ems_report = ems.run(grid)
-
-        # ── 3. Physics flow (BFS + voltage) ──
+        # ── 2. Physics flow FIRST (BFS + voltage) ──
         grid.update_power_flow()
 
-        # ── 4 & 5. SCADA detects issues + FLISR reroutes ──
-        # Note: scada.execute_control_loop includes FLISR which handles 
-        # ── 6. If fails → use storage + shedding ── by calling ems.run_for_cluster()
+        # ── 3. EMS reacts to imbalance AFTER physics ──
+        ems_report = ems.run(grid)
+
+        # ── 4. SCADA detects issues + FLISR reroutes ──
+        # Note: scada.execute_control_loop includes FLISR which handles
+        # ── 5. If fails → use storage + shedding ── by calling ems.run_for_cluster()
         scada_report = scada.execute_control_loop(grid, ems)
 
         return {

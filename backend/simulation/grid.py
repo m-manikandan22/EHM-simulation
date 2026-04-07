@@ -61,7 +61,8 @@ class SmartGrid:
     """
 
     def __init__(self):
-        self.graph = nx.Graph()
+        # FIX: Use DiGraph for directional power flow (source → downstream)
+        self.graph = nx.DiGraph()
         self.nodes: dict[str, GridNode] = {}
         self.timestep: int = 0
         self.storm_active: bool = False
@@ -428,10 +429,17 @@ class SmartGrid:
             has_switch = True   # auto-set for backward compat
         switch_status = "open" if not active else "closed"
 
-        self.graph.add_edge(u, v, capacity=capacity, resistance=resistance, flow=0.0,
-                            active=active, has_switch=has_switch, is_tie_switch=is_tie_switch,
-                            switch_type=switch_type or ("tie" if is_tie_switch else ("sectionalizer" if has_switch else None)),
-                            switch_status=switch_status)
+        edge_attrs = {
+            'capacity': capacity, 'resistance': resistance, 'flow': 0.0,
+            'active': active, 'has_switch': has_switch, 'is_tie_switch': is_tie_switch,
+            'switch_type': switch_type or ("tie" if is_tie_switch else ("sectionalizer" if has_switch else None)),
+            'switch_status': switch_status
+        }
+
+        # FIX: Add edge in both directions for bidirectional flow
+        # Power normally flows forward (u→v), but tie switches allow reverse
+        self.graph.add_edge(u, v, **edge_attrs)
+        self.graph.add_edge(v, u, **edge_attrs)
 
     def move_node(self, node_id: str, new_x: float, new_y: float):
         """Updates spatial coordinates and dynamically recalcs edge physics based on stretching."""
@@ -580,15 +588,23 @@ class SmartGrid:
         if not has_failed_nodes and not has_tripped_cable:
             return   # healthy grid — nothing to isolate
 
-        segment_graph = nx.Graph()
+        # FIX: Use directed graph for proper fault propagation (downstream only)
+        # Build directed segment graph - maintain direction from source to downstream
+        segment_graph = nx.DiGraph()
 
         # ── Segment graph: all active edges EXCEPT switch-type edges ──────────
         # This carves the network into segments bounded by switches.
         # A segment = one connected component in this subgraph.
+        # FIX: Add edges in both directions so descendants() finds all connected nodes
+        # This ensures proper fault isolation - when a node fails, all nodes that
+        # receive power FROM it (downstream) are isolated
         SWITCH_TYPES = ("sectionalizer", "recloser", "tie")
         for u, v, data in self.graph.edges(data=True):
             if data.get("switch_type") not in SWITCH_TYPES and not data.get("is_tie_switch"):
+                # Add edge in both directions - needed for descendants() to work
+                # In DiGraph, descendants(u) returns nodes reachable from u
                 segment_graph.add_edge(u, v)
+                segment_graph.add_edge(v, u)
 
         for nid in self.nodes:
             segment_graph.add_node(nid)
@@ -596,16 +612,26 @@ class SmartGrid:
         faulted_segments: set[frozenset] = set()
 
         # ── Detect faults from failed nodes ───────────────────────────────────
+        # FIX: Use descendants() to get only DOWNSTREAM nodes (direction of flow)
+        # This ensures when LA0_2 fails, only LA0_2 + downstream are affected,
+        # NOT LA0_1 (which is upstream)
         for nid, node in self.nodes.items():
             if node.failed:
-                comp = frozenset(nx.node_connected_component(segment_graph, nid))
+                # Get only downstream nodes using descendants
+                downstream = nx.descendants(segment_graph, nid)
+                # Include the failed node itself
+                downstream.add(nid)
+                comp = frozenset(downstream)
                 faulted_segments.add(comp)
 
         # ── Detect faults from tripped (non-switch) cables ────────────────────
         for u, v, data in self.graph.edges(data=True):
             if not data.get("active") and not data.get("switch_type"):
                 if u in segment_graph:
-                    comp = frozenset(nx.node_connected_component(segment_graph, u))
+                    # Tripped cable affects downstream from the break point
+                    downstream = nx.descendants(segment_graph, u)
+                    downstream.add(u)
+                    comp = frozenset(downstream)
                     faulted_segments.add(comp)
 
         # ── Open boundary switches for all faulted segments ───────────────────
@@ -671,12 +697,16 @@ class SmartGrid:
         # Closed tie switches are the key to dual-direction flow:
         # when FLISR closes a tie, it becomes a normal active edge here,
         # and the SUPER_SOURCE BFS naturally routes power through it.
-        active_graph = nx.Graph()
+        # FIX: Use DiGraph to preserve flow direction (source → downstream)
+        active_graph = nx.DiGraph()
         for u, v, data in self.graph.edges(data=True):
             if (data.get("active", True)
                     and not self.nodes[u].failed
                     and not self.nodes[v].failed):
+                # Add edge in both directions to allow bidirectional power flow
+                # This is needed because power can flow either direction in distribution
                 active_graph.add_edge(u, v, **data)
+                active_graph.add_edge(v, u, **data)
 
         # ── Multi-Source BFS tree using continuous SUPER_SOURCE ──
         # Include all generator types: generator, generator_solar, generator_wind, etc.

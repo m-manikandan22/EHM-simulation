@@ -76,7 +76,7 @@ function getNodeColor(node) {
     case 'generator':           return '#f59e0b'  // Amber  — Generic Generator
     case 'generator_solar':     return '#eab308'  // Yellow — Solar Farm
     case 'generator_wind':      return '#bfdbfe'  // Light blue — Wind Farm
-    case 'generator_nuclear':   return '#10b981'  // Emerald — Nuclear Plant
+    case 'generator_nuclear':   return '#3b82f6'  // Blue — Nuclear Plant (unified flow)
     case 'generator_coal':      return '#374151'  // Gray-700 — Coal Plant
     case 'generator_gas':       return '#f97316'  // Orange — Gas Turbine
     // Legacy types
@@ -129,6 +129,19 @@ function getEdgeColor(edge) {
   if (edge.flow && Math.abs(edge.flow) > 0.05) return '#3b82f6'
 
   return 'rgba(148,163,184,0.4)'             // idle — subdued
+}
+
+// Get flow color based on energy source type for visual differentiation
+function getFlowColor(source_type) {
+  switch(source_type) {
+    case "solar":    return "#eab308"   // Yellow - solar energy
+    case "wind":     return "#38bdf8"   // Sky blue - wind energy
+    case "battery":  return "#a855f7"  // Purple - storage discharge
+    case "nuclear":  return "#3b82f6"  // Blue - nuclear baseload
+    case "coal":     return "#374151"  // Gray - coal
+    case "gas":      return "#f97316"  // Orange - gas peaker
+    default:         return "#3b82f6"  // Default blue for flow
+  }
 }
 
 // Must match backend grid.py canvas dimensions
@@ -380,12 +393,26 @@ export default function GridGraph({
         const conn = d.source.id === selectedNode || d.target.id === selectedNode
         return conn ? (d.active ? 1 : 0.4) : 0.12
       })
-      .attr('stroke', d =>
-        currentMode === MODES.CUT_EDGE ? '#ef4444' : getEdgeColor(d)
-      )
+      .attr('stroke', d => {
+        // Cut edge mode - red
+        if (currentMode === MODES.CUT_EDGE) return '#ef4444'
+
+        // Color by source when there's flow
+        if (d.active && Math.abs(d.flow || 0) > 0.01) {
+          const sourceNode = d.source
+          if (sourceNode.node_type === 'battery' || sourceNode.node_type === 'supercap') return '#a855f7'  // Purple
+          if (sourceNode.node_type?.includes('solar')) return '#facc15'  // Yellow
+          if (sourceNode.node_type?.includes('wind')) return '#38bdf8'  // Blue
+          // FIX: Use blue for all power flow (unified flow system)
+          if (sourceNode.node_type?.includes('nuclear')) return '#3b82f6' // Blue
+          if (sourceNode.node_type === 'generator' || sourceNode.node_type === 'substation') return '#3b82f6' // Blue
+        }
+
+        return getEdgeColor(d)
+      })
       .attr('stroke-width', d => {
         if (!d.active) return 1
-        
+
         let baseWidth = 1.5;
         if (d.source.node_type === 'generator' || d.source.node_type === 'substation' || d.target.node_type === 'substation') baseWidth = 5.0;
         else if (d.source.node_type === 'transformer' || d.target.node_type === 'transformer') baseWidth = 4.0;
@@ -393,14 +420,17 @@ export default function GridGraph({
         else if (d.source.node_type === 'house' || d.target.node_type === 'house') baseWidth = 1.2; // service drops
         else baseWidth = 2.5; // laterals
 
-        // Give a tiny bump based on flow to feel alive, but respect the static architectural hierarchy mostly
-        return Math.max(baseWidth, (baseWidth * 0.8) + Math.abs(d.flow || 0) * 0.3)
+        // Flow intensity: more power = thicker line (tuned: 1.5 + flow * 1.2)
+        const flowBoost = Math.abs(d.flow || 0) * 1.2
+        return Math.max(baseWidth, 1.5 + flowBoost)
       })
       .style('stroke-dasharray', d => {
         if (d.status === 'broken') return '10 5'      // Long dash for broken
-        if (d.status === 'rerouted') return 'none'   // Solid for rerouted (glowing)
+        if (d.status === 'rerouted') return '10 6'    // Flow animation for rerouted
         if (d.is_tie_switch) return '6 4'
         if (d.source.node_type === 'house' || d.target.node_type === 'house') return '3 3'
+        // Flow animation when there's active flow (avoid conflicts with broken/rerouted)
+        if (d.active && Math.abs(d.flow || 0) > 0.01) return '10 6'
         return 'none'
       })
       .style('filter', d => {
@@ -410,15 +440,29 @@ export default function GridGraph({
         return 'none'
       })
       .attr('class', d => {
+        const hasFlow = d.active && Math.abs(d.flow || 0) > 0.01
+        const flowDirection = d.flow >= 0 ? 'flow-forward' : 'flow-reverse'
+
         // switch_status state machine → CSS class
         if (d.switch_status === 'fault_locked') return 'wire fault-segment'
-        if (d.status === 'rerouted')            return 'wire reroute-active'     // 🟡 FLISR new path
+        if (d.status === 'rerouted')            return 'wire reroute-active flow-line'     // 🟡 FLISR new path
         if (d.status === 'broken')              return 'wire reroute-broken'     // 🔴 Old fault path
         if (d.is_tie_switch && d.active)        return 'wire tie-switch-closed'  // 🟢 FLISR restored
         if (d.is_tie_switch && !d.active)       return 'wire tie-switch-open'    // ⚪ standby
         // Non-switch faults (blown cable)
         if (!d.active && (d.source.failed || d.target.failed)) return 'wire fault-segment'
+        // Flow animation classes when there's flow
+        if (hasFlow) return `wire flow-line ${flowDirection}`
         return 'wire'
+      })
+      // Dynamic animation speed based on flow magnitude (FIX 5)
+      // High power → fast flow (low duration), Low power → slow flow (high duration)
+      .style('animation-duration', d => {
+        if (!d.active || Math.abs(d.flow || 0) < 0.01) return 'none'
+        const absFlow = Math.abs(d.flow)
+        // Speed range: 1.5s (high power) to 4s (low power)
+        const speed = Math.max(1.5, 4 - absFlow * 0.5)
+        return `${speed}s`
       })
       .attr('marker-end', d =>
         d.active && !d.source.failed && !d.target.failed && Math.abs(d.flow || 0) > 0.01
@@ -525,7 +569,7 @@ export default function GridGraph({
       switch (node.node_type) {
         case 'generator_solar': return '#eab308' // 🟡 Solar - Yellow
         case 'generator_wind': return '#3b82f6'  // 🔵 Wind - Blue
-        case 'generator_nuclear': return '#10b981' // 🟢 Nuclear - Green
+        case 'generator_nuclear': return '#3b82f6' // 🔵 Nuclear - Blue (unified flow)
         case 'generator_coal':
         case 'generator_gas':
         case 'generator': return '#f97316'      // 🟠 Fossil - Orange
@@ -556,142 +600,17 @@ export default function GridGraph({
     const autoShowFlow = showFlow || (activePaths.length > 0)
     const flowEdges = autoShowFlow ? getEdgesWithFlow(links, edgeFlows) : []
 
-    // Draw particles on each edge with flow
+    // FLOWING LINE ANIMATION: Instead of particles, the wire paths themselves now have
+    // the flow animation via CSS classes (flow-line, flow-forward, flow-reverse)
+    // See wire path rendering above for the animated stroke-dasharray
+    // Particle code removed - using flowing line instead of bubbles
+
+    // Remove any existing particle groups (cleanup)
     const flowRouteSel = root.select('.links').selectAll('g.flow-route')
-      .data(flowEdges, (d) => `${d.source.id}-${d.target.id}`)
+    flowRouteSel.remove()
 
-    const flowRouteEnter = flowRouteSel.enter().append('g')
-      .attr('class', 'flow-route')
-
-    // Process each edge with flow
-    flowEdges.forEach((flowEdge, idx) => {
-      const { edge, flow, source, target } = flowEdge
-
-      // Skip faulted/inactive edges - CRITICAL for fault visualization
-      if (!edge.active || edge.status === 'fault_locked' || edge.status === 'broken') {
-        return // Don't spawn particles on broken edges
-      }
-
-      // Build simple edge path "M x1 y1 L x2 y2"
-      const pathD = `M ${source.x} ${source.y} L ${target.x} ${target.y}`
-
-      // Determine color based on source type and storage flow direction (FIX 3)
-      // Flow > 0: source -> target (discharging if source is battery)
-      // Flow < 0: target -> source (charging if target is battery)
-      let color
-      const isSourceStorage = source.node_type === 'battery' || source.node_type === 'supercap'
-      const isTargetStorage = target.node_type === 'battery' || target.node_type === 'supercap'
-
-      if (isSourceStorage) {
-        // Battery/supercap is SOURCE = DISCHARGING (flow leaving storage)
-        color = getSourceColor(source.id, nodeMap, flow, true)
-      } else if (isTargetStorage) {
-        // Battery/supercap is TARGET = CHARGING (flow entering storage)
-        // Use negative flow to indicate charging direction
-        color = getSourceColor(source.id, nodeMap, -flow, false) // Get color based on what's feeding the storage
-      } else {
-        // Normal edge - use source color
-        color = getSourceColor(source.id, nodeMap)
-      }
-
-      // FLOW MAGNITUDE determines particle count (FIX 2)
-      // More flow = more particles, less flow = fewer particles
-      const absFlow = Math.abs(flow) || 0.1 // Default minimum for edges without explicit flow
-      const particleCount = Math.max(2, Math.min(30, Math.round(absFlow * 15)))
-
-      // Animation speed based on flow magnitude
-      const baseDur = 6.0
-      const duration = absFlow > 0 ? Math.max(1.5, baseDur - absFlow * 0.3) : baseDur
-
-      // Direction: flow > 0 = source->target, flow < 0 = target->source
-      const forward = flow >= 0
-
-      // Select this specific edge group
-      const edgeGroup = flowRouteEnter.filter((d, i) => i === idx)
-
-      // Add invisible path for animation reference
-      edgeGroup.append('path')
-        .attr('class', 'flow-path-reference')
-        .attr('d', pathD)
-        .attr('fill', 'none')
-        .attr('stroke', 'none')
-        .attr('id', `edge-path-${source.id}-${target.id}`)
-
-      // Spawn particles on THIS edge (FIX 1: edge-based, not route-based)
-      for (let p = 0; p < particleCount; p++) {
-        // VARIABLE SPEED - quantum spread effect
-        const speedVariation = 0.6 + Math.random() * 0.8 // 0.6 to 1.4x
-        const particleDuration = duration / speedVariation
-
-        // RANDOM START POSITION - organic flow
-        const randomStart = Math.random() * particleDuration
-
-        // VARIABLE SIZE - depth effect
-        const sizeVariation = 1.5 + Math.random() * 4 // 1.5-5.5px radius
-
-        // QUANTUM SPREAD (FIX 5): Add position offset randomness
-        // This creates organic, non-linear particle movement
-        const offsetX = (Math.random() - 0.5) * 8 // ±4px offset
-        const offsetY = (Math.random() - 0.5) * 8
-
-        // Add flowing particle with offset for quantum spread
-        const particle = edgeGroup.append('circle')
-          .attr('class', 'flow-particle')
-          .attr('r', sizeVariation)
-          .attr('fill', color)
-          .attr('opacity', 0.6 + Math.random() * 0.4)
-          .style('filter', `drop-shadow(0 0 ${3 + Math.random() * 5}px ${color})`)
-
-        // SMIL animation with direction consideration
-        if (forward) {
-          particle.append('animateMotion')
-            .attr('dur', `${particleDuration}s`)
-            .attr('repeatCount', 'indefinite')
-            .attr('path', pathD)
-            .attr('rotate', 'auto')
-            .attr('begin', `-${randomStart}s`)
-        } else {
-          // Reverse direction for negative flow
-          particle.append('animateMotion')
-            .attr('dur', `${particleDuration}s`)
-            .attr('repeatCount', 'indefinite')
-            .attr('path', pathD)
-            .attr('rotate', 'auto')
-            .attr('begin', `-${randomStart}s`)
-            .attr('keyPoints', '1;0')
-            .attr('keyTimes', '0;1')
-            .attr('calcMode', 'linear')
-        }
-
-        // Add trailing glow for high-flow edges
-        if (absFlow > 0.3 && p % 4 === 0) {
-          const trailDelay = randomStart + (particleDuration * 0.15)
-          const trail = edgeGroup.append('circle')
-            .attr('class', 'flow-particle-trail')
-            .attr('r', 1.2)
-            .attr('fill', color)
-            .attr('opacity', 0.3)
-            .style('filter', `drop-shadow(0 0 2px ${color})`)
-
-          if (forward) {
-            trail.append('animateMotion')
-              .attr('dur', `${particleDuration}s`)
-              .attr('repeatCount', 'indefinite')
-              .attr('path', pathD)
-              .attr('begin', `-${trailDelay}s`)
-          } else {
-            trail.append('animateMotion')
-              .attr('dur', `${particleDuration}s`)
-              .attr('repeatCount', 'indefinite')
-              .attr('path', pathD)
-              .attr('begin', `-${trailDelay}s`)
-              .attr('keyPoints', '1;0')
-              .attr('keyTimes', '0;1')
-              .attr('calcMode', 'linear')
-          }
-        }
-      }
-    })
+    // Skip particle spawning - flowing line animation is applied to wire paths directly
+    // via CSS classes: flow-line, flow-forward, flow-reverse
 
     // Update existing flow edges
     flowRouteSel.exit().remove()
