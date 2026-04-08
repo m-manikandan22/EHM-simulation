@@ -436,10 +436,27 @@ class SmartGrid:
             'switch_status': switch_status
         }
 
-        # FIX: Add edge in both directions for bidirectional flow
-        # Power normally flows forward (u→v), but tie switches allow reverse
+        # FIX: Add edge in ONE direction only (parent → child)
+        # Power flows: substation → transformer → pole → house
+        # Reverse edge added ONLY for tie switches (controlled bidirectional)
         self.graph.add_edge(u, v, **edge_attrs)
-        self.graph.add_edge(v, u, **edge_attrs)
+
+        # Tie switches allow reverse flow - add reverse edge only for ties
+        if is_tie_switch and active:
+            reverse_attrs = edge_attrs.copy()
+            reverse_attrs['reverse_tie'] = True  # Mark as reverse tie edge
+            self.graph.add_edge(v, u, **reverse_attrs)
+
+    def _get_active_directed_graph(self) -> nx.DiGraph:
+        """
+        Create a DiGraph with ONLY active edges for proper fault propagation.
+        This ensures descendants() only follows working power lines.
+        """
+        G = nx.DiGraph()
+        for u, v, d in self.graph.edges(data=True):
+            if d.get("active", True):  # ONLY active edges
+                G.add_edge(u, v, **d)
+        return G
 
     def move_node(self, node_id: str, new_x: float, new_y: float):
         """Updates spatial coordinates and dynamically recalcs edge physics based on stretching."""
@@ -592,19 +609,18 @@ class SmartGrid:
         # Build directed segment graph - maintain direction from source to downstream
         segment_graph = nx.DiGraph()
 
-        # ── Segment graph: all active edges EXCEPT switch-type edges ──────────
+        # ── Segment graph: ONLY active non-switch edges in ONE direction ─────────
         # This carves the network into segments bounded by switches.
-        # A segment = one connected component in this subgraph.
-        # FIX: Add edges in both directions so descendants() finds all connected nodes
-        # This ensures proper fault isolation - when a node fails, all nodes that
-        # receive power FROM it (downstream) are isolated
+        # Use ONLY active edges to avoid including broken cables in propagation calc
         SWITCH_TYPES = ("sectionalizer", "recloser", "tie")
         for u, v, data in self.graph.edges(data=True):
+            # CRITICAL: Only use ACTIVE edges - don't include broken cables
+            if not data.get("active", True):
+                continue
             if data.get("switch_type") not in SWITCH_TYPES and not data.get("is_tie_switch"):
-                # Add edge in both directions - needed for descendants() to work
-                # In DiGraph, descendants(u) returns nodes reachable from u
+                # Add edge in ONE direction only (parent → child)
+                # descendants(u) will find all nodes that receive power FROM u
                 segment_graph.add_edge(u, v)
-                segment_graph.add_edge(v, u)
 
         for nid in self.nodes:
             segment_graph.add_node(nid)
@@ -693,20 +709,19 @@ class SmartGrid:
             data["flow"] = 0.0
 
         # ── Build active sub-graph ─────────────────────────────────────────────
-        # Include ALL active edges (including closed tie switches).
-        # Closed tie switches are the key to dual-direction flow:
-        # when FLISR closes a tie, it becomes a normal active edge here,
-        # and the SUPER_SOURCE BFS naturally routes power through it.
+        # Include ONLY active edges in forward direction (parent → child).
+        # Tie switches are handled specially - only closed ties allow reverse flow.
         # FIX: Use DiGraph to preserve flow direction (source → downstream)
         active_graph = nx.DiGraph()
         for u, v, data in self.graph.edges(data=True):
             if (data.get("active", True)
                     and not self.nodes[u].failed
                     and not self.nodes[v].failed):
-                # Add edge in both directions to allow bidirectional power flow
-                # This is needed because power can flow either direction in distribution
+                # Add forward edge only (parent → child)
                 active_graph.add_edge(u, v, **data)
-                active_graph.add_edge(v, u, **data)
+                # Only add reverse edge for closed tie switches (allows reverse power flow)
+                if data.get("is_tie_switch") and data.get("active"):
+                    active_graph.add_edge(v, u, **data)
 
         # ── Multi-Source BFS tree using continuous SUPER_SOURCE ──
         # Include all generator types: generator, generator_solar, generator_wind, etc.
@@ -781,6 +796,12 @@ class SmartGrid:
 
             # Write signed flow to graph edge (negative = reverse / solar injection)
             self.graph[parent][child]["flow"] = round(net_pflow, 4)
+            # Track source type for frontend coloring - determine which generator supplies this edge
+            parent_node = self.nodes.get(parent)
+            if parent_node and parent_node.source_type:
+                self.graph[parent][child]["source_type"] = parent_node.source_type
+            elif parent_node and parent_node.node_type:
+                self.graph[parent][child]["source_type"] = parent_node.node_type
             try:
                 self.graph[child][parent]["flow"] = round(net_pflow, 4)
             except (KeyError, Exception):

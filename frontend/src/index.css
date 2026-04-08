@@ -245,27 +245,6 @@ html, body, #root {
 }
 
 /* 🟡 FLISR Rerouting: New path (glowing amber/gold) */
-@keyframes reroute-pulse {
-  0%   { filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.6));  }
-  50%  { filter: drop-shadow(0 0 12px rgba(245, 158, 11, 1.0)); }
-  100% { filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.6));  }
-}
-.reroute-active {
-  stroke: #f59e0b !important; /* amber-500 */
-  stroke-width: 4 !important;
-  animation: reroute-pulse 1.2s ease-in-out infinite;
-}
-
-/* 🔴 FLISR Broken: Old fault path (dimmed dark red, dashed) */
-.reroute-broken {
-  stroke: #7f1d1d !important; /* red-900 */
-  stroke-width: 2 !important;
-  stroke-dasharray: 10 5;
-  opacity: 0.4 !important;
-  filter: drop-shadow(0 0 2px rgba(127, 29, 29, 0.5));
-}
-
-/* 🟡 FLISR Rerouting Visualization — NEW PATH after tie switch closes */
 @keyframes reroute-glow {
   0%   { filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.5));  stroke-width: 3; }
   50%  { filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.95)); stroke-width: 5; }
@@ -282,81 +261,12 @@ html, body, #root {
 .reroute-broken {
   stroke: #7f1d1d !important;  /* Dark red */
   stroke-dasharray: 10 5 !important;
+  opacity: 0.4 !important;
 }
-
-/* ═══════════════════════════════════════════════════════════════════
-   CONTINUOUS FLOW ANIMATION STYLES
-   ═══════════════════════════════════════════════════════════════════ */
-
-/* Flow particle with glow effect */
-.flow-particle {
-  animation: flow-pulse 1s ease-in-out infinite;
-}
-
-@keyframes flow-pulse {
-  0% { opacity: 0.8; }
-  50% { opacity: 1; }
-  100% { opacity: 0.8; }
-}
-
-/* Flow particle trail effect */
-.flow-particle-trail {
-  animation: trail-fade 1.5s ease-out infinite;
-}
-
-@keyframes trail-fade {
-  0% { opacity: 0.5; transform: scale(1); }
-  50% { opacity: 0.3; transform: scale(0.8); }
-  100% { opacity: 0.1; transform: scale(0.5); }
-}
-
-/* Source-specific flow colors with enhanced glow */
-.flow-solar { fill: #eab308; filter: drop-shadow(0 0 8px #eab308); }
-.flow-wind { fill: #3b82f6; filter: drop-shadow(0 0 8px #3b82f6); }
-.flow-nuclear { fill: #10b981; filter: drop-shadow(0 0 8px #10b981); }
-.flow-battery { fill: #a855f7; filter: drop-shadow(0 0 8px #a855f7); }
-.flow-grid { fill: #22c55e; filter: drop-shadow(0 0 8px #22c55e); }
-
 
 /* ═══════════════════════════════════════════════════════════════ */
-/* CONTINUOUS FLOW ANIMATION STYLES (System-Level)              */
+/* EDGE-BASED FLOW ANIMATION STYLES (System-Level)              */
 /* ═══════════════════════════════════════════════════════════════ */
-
-/* Flow particle styling with glow */
-.flow-particle {
-  filter: drop-shadow(0 0 6px currentColor);
-  pointer-events: none;
-}
-
-.flow-particle-trail {
-  pointer-events: none;
-}
-
-/* Flow route container */
-.flow-route {
-  pointer-events: none;
-}
-
-/* Glow intensity based on source type */
-.flow-glow-solar {
-  filter: drop-shadow(0 0 8px rgba(234, 179, 8, 0.9));
-}
-
-.flow-glow-wind {
-  filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.9));
-}
-
-.flow-glow-nuclear {
-  filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.9));
-}
-
-.flow-glow-battery {
-  filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.95));
-}
-
-.flow-glow-grid {
-  filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.8));
-}
 
 /* ═══════════════════════════════════════════════════════════════ */
 /* ANIMATION KEYFRAMES                                            */

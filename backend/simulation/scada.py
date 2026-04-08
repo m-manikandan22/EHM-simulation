@@ -562,7 +562,8 @@ class ScadaControlCenter:
             entry("RECOMPUTE",
                   f"Triggering immediate power-flow recompute for {restored_clusters} restored cluster(s).",
                   "info", t_rest + 0.2)
-            grid._simulate_energy_flow()
+            # FORCE FULL RECOMPUTE AFTER SWITCH
+            grid.update_power_flow()
 
         if restored_clusters == total_islands:
             msg = (f"SCADA FLISR: \u2705 All {restored_clusters} island(s) restored via tie(s) "
