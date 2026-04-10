@@ -108,9 +108,9 @@ def compute_reward(observation: Dict[str, Any], action: Dict[str, Any]) -> float
       -1.0  per high-stress node
     """
     reward = 0.0
-    nodes = observation.get("nodes", [])
+    nodes = observation.get("nodes", {})
 
-    for node in nodes:
+    for node_id, node in nodes.items():
         node_type = node.get("type", "")
         loads     = node.get("loads", [])
 
@@ -196,12 +196,12 @@ def select_action_heuristic(observation: Dict[str, Any],
       - If sentiment is negative    → shift load to reduce stress
       - Default                     → routine monitoring
     """
-    nodes    = observation.get("nodes", [])
+    nodes    = observation.get("nodes", {})
     edges    = observation.get("edges", [])
 
     has_critical = any(
         any(l.get("priority") == "CRITICAL" for l in n.get("loads", []))
-        for n in nodes
+        for n in nodes.values()
     )
     has_tie_available = any(e.get("is_tie", False) and not e.get("is_switch", True)
                             for e in edges)
@@ -241,8 +241,8 @@ def _build_prompt(observation: Dict[str, Any],
                   sentiment: str) -> str:
     """Builds a concise, structured prompt for the LLM action selector."""
     nodes_summary = [
-        {"id": n["id"], "type": n["type"], "loads": len(n.get("loads", []))}
-        for n in observation.get("nodes", [])[:5]   # limit for token budget
+        {"id": n.get("id"), "type": n.get("type"), "loads": len(n.get("loads", []))}
+        for n in list(observation.get("nodes", {}).values())[:5]   # limit for token budget
     ]
     return (
         f"You are a smart grid control AI. Your task is to choose the best action.\n\n"
@@ -268,9 +268,9 @@ def check_escalation(observation: Dict[str, Any], cumulative_reward: float) -> b
       - 3+ critical nodes simultaneously
       - Cumulative reward below -10 (system degrading)
     """
-    nodes    = observation.get("nodes", [])
+    nodes    = observation.get("nodes", {})
     crit_cnt = sum(
-        1 for n in nodes
+        1 for n in nodes.values()
         if any(l.get("priority") == "CRITICAL" for l in n.get("loads", []))
     )
     if crit_cnt >= 3:
@@ -335,7 +335,7 @@ def run_inference(max_steps: int = 5) -> Dict[str, Any]:
         # ── ISSUE 3 FIX: read 'customer_sentiment' not hardcoded 'neutral' ──
         sentiment = observation.get("customer_sentiment", "neutral")   # ✅ FIX 3
 
-        print(f"  Nodes       : {len(observation.get('nodes', []))}")
+        print(f"  Nodes       : {len(observation.get('nodes', {}))}")
         print(f"  Sentiment   : {sentiment}")
         print(f"  Prev context: {len(workflow_context)} key(s)")
 

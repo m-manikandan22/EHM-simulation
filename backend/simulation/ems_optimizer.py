@@ -24,7 +24,7 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 try:
-    import pypsa
+    import pypsa  # type: ignore
     import numpy as np
     import pandas as pd
     PYPSA_AVAILABLE = True

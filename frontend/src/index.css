@@ -183,14 +183,15 @@ html, body, #root {
   to   { stroke-dashoffset: -16; }
 }
 
-/* 🧠 Control: green dashed pulse on the SAME physical path */
-.control-overlay {
-  stroke: var(--accent-green);
-  stroke-width: 2;
-  stroke-dasharray: 5 7;
-  animation: flow 1.4s linear infinite;
-  opacity: 0.85;
-  filter: drop-shadow(0 0 5px rgba(34, 197, 94, 0.9));
+/* ⚡ Voltage stress ring: dashed halo on under-voltage nodes */
+/* Driven by node.voltage < 0.95 pu — pure physics indicator   */
+@keyframes voltage-stress {
+  0%   { opacity: 0.5; r: 14; }
+  50%  { opacity: 1.0; r: 17; }
+  100% { opacity: 0.5; r: 14; }
+}
+.v-ring {
+  animation: voltage-stress 1.8s ease-in-out infinite;
 }
 
 /* 🔴 Fault: wire turns red, flow stops */
@@ -288,80 +289,16 @@ html, body, #root {
   animation: flow-pulse 0.5s ease-in-out infinite;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   FLOWING LINE ANIMATION (Replaces Particles)
-   ═══════════════════════════════════════════════════════════════════ */
-
-/* Base flowing line - dash animation */
-.flow-line {
-  stroke-dasharray: 6 10;
-  fill: none;
-  stroke-linecap: round;
-  animation: flowMove 2.5s ease-in-out infinite;
-  filter: drop-shadow(0 0 3px currentColor);
-}
-
-/* Flow direction - forward (normal animation) */
-.flow-forward {
-  animation-direction: normal;
-}
-
-/* Flow direction - reverse (for negative flow, battery charging, solar injection) */
-.flow-reverse {
-  animation-direction: reverse;
-}
-
-/* Keyframes for dash flow animation */
-@keyframes flowMove {
-  from {
-    stroke-dashoffset: 0;
-  }
-  to {
-    stroke-dashoffset: -16;
-  }
-}
-
-/* Color by source type */
-.flow-source-solar {
-  stroke: #facc15 !important;
-}
-
-.flow-source-wind {
-  stroke: #38bdf8 !important;
-}
-
-.flow-source-battery {
-  stroke: #a855f7 !important;
-}
-
-.flow-source-nuclear {
-  stroke: #3b82f6 !important;
-}
-
-.flow-source-grid {
-  stroke: #3b82f6 !important;
-}
-
-/* Reroute visual - orange glow (slower, smoother) */
-.reroute-active.flow-line {
-  stroke: #f59e0b !important;
-  stroke-width: 4 !important;
-  animation: flowMove 1.5s ease-in-out infinite;
-  filter: drop-shadow(0 0 6px #f59e0b);
-}
-
-/* Fault visual - red line, no animation */
-.fault-line.flow-line,
-.wire.fault-segment {
-  stroke: #ef4444 !important;
-  stroke-width: 4 !important;
-  animation: none !important;
-  filter: drop-shadow(0 0 4px #ef4444);
-}
-
 /* Broken edge - dashed red */
 .reroute-broken {
   stroke: #7f1d1d !important;
   stroke-dasharray: 10 5 !important;
   animation: none !important;
 }
+
+
+.particle-container {
+  pointer-events: none;
+}
+
+/* End of CSS */

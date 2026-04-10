@@ -41,6 +41,7 @@ export const deleteNodeAPI = (node_id) => api.delete(`/nodes/${node_id}`).then(r
 
 export const getAISuggestions = () => api.get('/ai/suggestions').then(r => r.data)
 export const getSuggestParent = (x, y) => api.post('/ai/suggest_parent', { x, y }).then(r => r.data)
+export const randomFaultAPI = () => api.post('/random_fault').then(r => r.data)
 
 // ── Events ────────────────────────────────────────────────────────────
 

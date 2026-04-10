@@ -12,7 +12,7 @@
  */
 
 import React, { useState } from 'react'
-import { triggerEvent, resetGrid } from '../services/api'
+import { triggerEvent, resetGrid, randomFaultAPI, failNodeAPI, restoreNodeAPI } from '../services/api'
 
 export default function ControlPanel({ gridState, onUpdate, onMessage, selectedNode, setSelectedNode }) {
   const [loading, setLoading] = useState(false)
@@ -49,6 +49,11 @@ export default function ControlPanel({ gridState, onUpdate, onMessage, selectedN
     healthPct > 70 ? 'var(--accent-green)' :
     healthPct > 40 ? 'var(--accent-yellow)' : 'var(--accent-red)'
 
+  // Get selected node state for contextual actions
+  const selectedNodeData = nodes[selectedNode]
+  const isNodeFailed = selectedNodeData?.failed
+  const isNodeIsolated = selectedNodeData?.isolated
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%', overflowY: 'auto', paddingRight: 4 }}>
 
@@ -58,6 +63,14 @@ export default function ControlPanel({ gridState, onUpdate, onMessage, selectedN
 
         {/* Action Buttons */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <button
+            className="btn btn-yellow"
+            disabled={loading}
+            onClick={() => call(() => randomFaultAPI(), 'Random Fault')}
+          >
+            ⚠️ Random Fault
+          </button>
+
           <button
             className="btn btn-yellow"
             disabled={loading}
@@ -85,22 +98,6 @@ export default function ControlPanel({ gridState, onUpdate, onMessage, selectedN
           )}
 
           <button
-            className="btn btn-red"
-            disabled={loading}
-            onClick={() => call(() => triggerEvent('failure', selectedNode), 'Failure')}
-          >
-            ⚠️ Fail Node: {selectedNode}
-          </button>
-
-          <button
-            className="btn btn-cyan"
-            disabled={loading}
-            onClick={() => call(() => triggerEvent('restore', selectedNode), 'Restore')}
-          >
-            🔧 Restore Node: {selectedNode}
-          </button>
-
-          <button
             className="btn btn-green"
             disabled={loading}
             onClick={() => call(() => triggerEvent('generation', null, 0.4), 'Generation')}
@@ -118,30 +115,11 @@ export default function ControlPanel({ gridState, onUpdate, onMessage, selectedN
         </div>
       </div>
 
-      <div>
-        <div className="section-title">✨ Presets (Demo Ready)</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <button className="btn btn-red" disabled={loading}
-            onClick={() => call(() => triggerEvent('storm'), 'Storm Triggered')}>
-            🌩️ Storm Scenario
-          </button>
-          <button className="btn btn-yellow" disabled={loading}
-            onClick={() => call(() => triggerEvent('failure', 'S0'), 'S0 Failed')}>
-            ⚡ Substation Failure
-          </button>
-          <button className="btn btn-purple" disabled={loading}
-            onClick={() => call(() => triggerEvent('demand', null, 0.6), 'Spike')}>
-            📈 High Demand Event
-          </button>
-        </div>
-      </div>
-
       {/* Node Selector */}
       <div>
         <div className="section-title">Target Node</div>
         <div className="node-selector">
           {Object.keys(nodes)
-            .filter(n => n.startsWith('G') || n.startsWith('S'))
             .sort()
             .map(nid => {
             const n = nodes[nid]
@@ -158,6 +136,34 @@ export default function ControlPanel({ gridState, onUpdate, onMessage, selectedN
           })}
         </div>
       </div>
+
+      {/* Contextual Node Actions - Show only relevant inverse actions */}
+      {selectedNodeData && (
+        <div className="glass-card" style={{ padding: '12px 16px', background: 'rgba(100,180,255,0.08)', border: '1px solid rgba(100,180,255,0.2)' }}>
+          <div className="section-title">⚙️ Node Actions</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(() => {
+              function handleNodeAction(node) {
+                if (node.failed) {
+                   call(() => restoreNodeAPI(node.id), `Restore ${node.id}`);
+                } else {
+                   call(() => failNodeAPI(node.id), `Fail ${node.id}`);
+                }
+              }
+
+              return (
+                 <button
+                   className={`btn ${selectedNodeData.failed ? 'btn-cyan' : 'btn-red'}`}
+                   disabled={loading}
+                   onClick={() => handleNodeAction(selectedNodeData)}
+                 >
+                   {selectedNodeData.failed ? '🔧 Restore Node' : '⚠️ Fail Node'}
+                 </button>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* System Stats */}
       <div className="glass-card" style={{ padding: '14px 16px' }}>
@@ -196,6 +202,28 @@ export default function ControlPanel({ gridState, onUpdate, onMessage, selectedN
             {(system.avg_frequency || 0).toFixed(2)} Hz
           </span>
         </div>
+        {/* ✅ FIX: separate failed poles vs no-power houses */}
+        {(() => {
+          const nodesArr = Object.entries(nodes)
+          const failedPoles = nodesArr.filter(([, n]) => (n.node_type === 'pole') && n.failed).length
+          const noPowerHouses = nodesArr.filter(([, n]) => (n.node_type === 'house') && n.isolated).length
+          return (
+            <>
+              <div className="metric-row">
+                <span className="metric-label">🚨 Failed Poles</span>
+                <span className="metric-value" style={{ color: failedPoles > 0 ? 'var(--accent-red)' : 'var(--accent-green)' }}>
+                  {failedPoles}
+                </span>
+              </div>
+              <div className="metric-row">
+                <span className="metric-label">🏠 No-Power Houses</span>
+                <span className="metric-value" style={{ color: noPowerHouses > 0 ? 'var(--accent-yellow)' : 'var(--accent-green)' }}>
+                  {noPowerHouses}
+                </span>
+              </div>
+            </>
+          )
+        })()}
 
         <div style={{ marginTop: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>

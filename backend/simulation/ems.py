@@ -176,30 +176,30 @@ class EnergyManagementSystem:
         absorbed_total = 0.0
         charged_count  = 0
 
-        # Sort: generation-role nodes first (they ARE the source of reverse flow)
-        targets = sorted(
-            [n for n in active_nodes if n.node_type == "house" and n.excess_energy > 0.05],
-            key=lambda n: (n.role != "generation", -n.excess_energy)
-        )
+        targets = [
+            n for n in active_nodes
+            if n.node_type in ("battery", "supercap")
+        ]
 
         for node in targets:
             if absorbed_total >= absorb_target:
                 break
-            headroom = (1.0 - node.battery_level) * node.battery_capacity
+            cap = getattr(node, "battery_capacity", 2.0) if node.node_type == "battery" else getattr(node, "supercap_capacity", 2.0)
+            level = getattr(node, "battery_level", 0.0) if node.node_type == "battery" else getattr(node, "supercap_level", 0.0)
+            headroom = (1.0 - level) * cap
             if headroom < 0.001:
                 continue
 
             # How much can we absorb here?
-            can_absorb  = min(
-                node.excess_energy * ABSORPTION_RATIO * BATTERY_CHARGE_RATE,
-                headroom,
-                absorb_target - absorbed_total
-            )
+            can_absorb = min(headroom, absorb_target - absorbed_total)
             if can_absorb < 0.001:
                 continue
 
-            node.battery_level = min(1.0, node.battery_level + can_absorb / node.battery_capacity)
-            node.excess_energy = max(0.0, node.excess_energy - can_absorb)
+            if node.node_type == "battery":
+                node.battery_level = min(1.0, node.battery_level + (can_absorb / cap))
+            else:
+                node.supercap_level = min(1.0, node.supercap_level + (can_absorb / cap))
+                
             absorbed_total += can_absorb
             charged_count  += 1
 
@@ -240,6 +240,8 @@ class EnergyManagementSystem:
                 node.battery_level = max(0.0, node.battery_level - delivered / node.battery_capacity)
                 # ✅ KEY FIX: inject as generation so BFS flow engine sees real power
                 node.generation = round(min(node.battery_capacity, node.generation + delivered), 4)
+                # Set source_type so flow engine can track battery source
+                node.source_type = "battery"
             else:
                 delivered = node.use_battery(want)
             
@@ -521,6 +523,7 @@ class EnergyManagementSystem:
                 elif decision.source_type == "battery":
                     # Battery discharge
                     node.generation = decision.amount_mw
+                    node.source_type = "battery"
                     # Reduce battery SOC
                     if node.battery_capacity > 0:
                         node.battery_level = max(0.0, node.battery_level -

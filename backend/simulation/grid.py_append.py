@@ -1,3 +1,8 @@
+# NOTE: This file is an append-patch for grid.py methods.
+# Imports below resolve IDE static-analysis warnings.
+import random
+from simulation.node import GridNode  # type: ignore
+
     # ------------------------------------------------------------------
     # User / UI Dynamic Grid Creation
     # ------------------------------------------------------------------

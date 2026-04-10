@@ -8,7 +8,7 @@ mutable module-level globals, which eliminates NoneType type errors.
 from __future__ import annotations
 
 import threading
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from fastapi import APIRouter, HTTPException, Request  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
@@ -16,6 +16,10 @@ from simulation.grid import SmartGrid  # type: ignore
 from simulation.scada import ScadaControlCenter  # type: ignore
 from simulation.ems import EnergyManagementSystem  # type: ignore
 from models.rl_agent import ACTIONS, N_ACTIONS  # type: ignore
+
+if TYPE_CHECKING:
+    from models.lstm_model import DemandForecaster  # type: ignore
+    from models.fault_detector import FaultDetector  # type: ignore
 
 router = APIRouter()
 grid_lock = threading.Lock()
@@ -113,9 +117,12 @@ def simulate_step(request: Request) -> dict:
     Advance simulation by 1 timestep.
 
     Real CPS execution order (enforced here):
-      1. grid.step()          — Physics only (power flow, voltage, overload trips)
-      2. ems.run(grid)        — EMS reacts to imbalance (partial storage dispatch)
-      3. scada.execute(grid)  — SCADA AI (fault detection, DQN decision, FLISR)
+      1. grid.update_generation()  — Generation (solar + wind + time-based curves)
+      2. grid.update_power_flow()  — Physics FIRST (backward/forward sweep)
+      3. ems.run(grid)              — EMS reacts to REAL imbalance (storage dispatch)
+      4. grid.update_power_flow()  — Recompute after EMS
+      5. scada.execute_control_loop() — SCADA AI (fault detection, FLISR rerouting)
+      6. grid.update_power_flow()  — Final recompute (after reroute)
 
     EMS runs AFTER physics so it reacts to real imbalance (not pre-empt it).
     EMS uses partial control (50 % absorption) so imbalance remains visible.
@@ -125,19 +132,23 @@ def simulate_step(request: Request) -> dict:
         ems:   EnergyManagementSystem = get_ems(request)
         scada: ScadaControlCenter    = get_scada(request)
 
-        # ── 1. Calculate generation (solar + wind) ──
+        # ── 1. Generation (solar + wind) ──
         grid.update_generation()
 
-        # ── 2. Physics flow FIRST (BFS + voltage) ──
+        # ── 2. Physics FIRST ──
         grid.update_power_flow()
 
-        # ── 3. EMS reacts to imbalance AFTER physics ──
+        # ── 3. EMS reacts to REAL imbalance ──
         ems_report = ems.run(grid)
 
-        # ── 4. SCADA detects issues + FLISR reroutes ──
-        # Note: scada.execute_control_loop includes FLISR which handles
-        # ── 5. If fails → use storage + shedding ── by calling ems.run_for_cluster()
+        # ── 4. Recompute after EMS ──
+        grid.update_power_flow()
+
+        # ── 5. SCADA + FLISR ──
         scada_report = scada.execute_control_loop(grid, ems)
+
+        # ── 6. Final recompute (after reroute) ──
+        grid.update_power_flow()
 
         return {
             "grid": grid.get_state(),
@@ -167,16 +178,9 @@ def simulate_step(request: Request) -> dict:
 
 
 
-
 # -----------------------------------------------------------------------
 # Grid Construction APIs (User Controlled)
 # -----------------------------------------------------------------------
-
-@router.post("/reset")
-def reset_grid(request: Request) -> dict:
-    grid: SmartGrid = get_grid(request)
-    grid.__init__()
-    return {"message": "Grid reset to initial state.", "grid": grid.get_state()}
 
 @router.post("/add_node")
 def add_user_node(req: NodeRequest, request: Request) -> dict:
@@ -381,8 +385,20 @@ def islanding_analysis(request: Request) -> dict:
 # -----------------------------------------------------------------------
 
 @router.post("/reset")
-def reset_grid(request: Request) -> dict:
+def reset_grid(request: Request) -> dict:  # type: ignore[no-redef]
     """Reset the grid to its initial state."""
     grid: SmartGrid = get_grid(request)
     msg = grid.reset()
+    return {"message": msg, "grid": grid.get_state()}
+
+
+# -----------------------------------------------------------------------
+# POST /random_fault
+# -----------------------------------------------------------------------
+
+@router.post("/random_fault")
+def random_fault(request: Request) -> dict:
+    """Inject a random failure on a random healthy pole node."""
+    grid: SmartGrid = get_grid(request)
+    msg = grid.random_failure()
     return {"message": msg, "grid": grid.get_state()}

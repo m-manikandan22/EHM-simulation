@@ -259,19 +259,13 @@ class ScadaControlCenter:
         def entry(step, detail, status="info", t=0.0):
             log.append({"step": step, "status": status, "detail": f"[{t:.1f}s] {detail}"})
 
-        # CRITICAL FIX: Path validation - only allow switching at defined switch points
-        def valid_switch_path(path_edges):
-            """
-            Validate that a path only uses switch edges.
-            Real grids only allow switching at defined switch points (reclosers/sectionalizers).
-            This prevents bypassing switch logic or creating illegal switching sequences.
-            """
-            for u, v in path_edges:
-                edge_data = grid.graph.get_edge_data(u, v, default={})
-                # Must have has_switch=True or be a tie switch to be valid for FLISR operations
-                if not edge_data.get("has_switch", False) and not edge_data.get("is_tie_switch", False):
-                    return False
-            return True
+        # CRITICAL FIX: Path validation - only allow switching at defined tie points
+        def valid_switch_path(path: list) -> bool:
+            switch_count = sum(
+                1 for i in range(len(path)-1)
+                if grid.graph[path[i]][path[i+1]].get("is_tie_switch")
+            )
+            return switch_count > 0  # Path MUST include a tie switch
 
         def get_path_edges(path_nodes):
             """Convert node path to edge list."""
@@ -388,7 +382,8 @@ class ScadaControlCenter:
                 flow  = abs(data.get("flow", 0.0))
                 R     = data.get("resistance", 0.01)
 
-                load_ratio  = (flow + cluster_load) / max(cap, 0.001)
+                cap = max(cap, 1e-6)
+                load_ratio  = (flow + cluster_load) / cap
                 v_drop_est  = R * cluster_load / NOMINAL_V
                 v_estimated = round(NOMINAL_V - v_drop_est, 4)
                 headroom    = round((cap - flow - cluster_load) / cap * 100, 1)
@@ -435,8 +430,8 @@ class ScadaControlCenter:
                                 path = nx.shortest_path(active_g, source_node, gen_id)
                                 path_edges = get_path_edges(path)
 
-                                # CRITICAL FIX: Only count if path uses only switch edges
-                                if not valid_switch_path(path_edges):
+                                # CRITICAL FIX: Only count if path uses a valid switch/tie line
+                                if not valid_switch_path(path):
                                     continue  # Skip paths that bypass switch logic
 
                                 switch_count = sum(1 for i in range(len(path)-1)
@@ -495,6 +490,9 @@ class ScadaControlCenter:
                     grid.nodes[nid].isolated = False
                     if grid.nodes[nid].voltage == 0.0:
                         grid.nodes[nid].voltage = best["v_estimated"]
+
+                # FIX: Instant reroute - update power flow immediately after switch close
+                grid.update_power_flow()
 
                 grid.event_log.append(
                     f"\u2705 FLISR: Cluster {cluster_idx+1} restored via tie {best['u']}\u2500{best['v']}"

@@ -63,6 +63,7 @@ class GridNode:
         self._base_generation: float = self.generation
 
         # --- Hybrid Storage ---
+        self.is_storage: bool = (node_type in ("battery", "supercap"))  # Storage flag for architecture
         self.battery_level: float = 1.0         # 0–1 (State of Charge)
         self.battery_capacity: float = 10.0     # MWh
         self.supercap_level: float = 1.0        # 0–1 (charge fraction)

@@ -20,7 +20,14 @@
       "Bash(tee /tmp/backend.log)",
       "Bash(curl -s -X POST http://localhost:8000/simulate)",
       "Bash(npm run:*)",
-      "Bash(curl -s http://localhost:5173)"
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(PYTHONPATH=. python:*)",
+      "Bash(curl -s -X POST \"http://localhost:8000/fail_node?node_id=P_A1\")",
+      "Bash(curl -s -X POST \"http://localhost:8000/fail_node?node_id=LA0_1\")",
+      "Bash(curl -s http://localhost:8000/simulate -X POST)",
+      "Bash(python3:*)",
+      "Bash(curl -s -X POST http://localhost:8000/reset)",
+      "Bash(curl -s -X POST http://localhost:8000/simulate -X POST)"
     ]
   }
 }

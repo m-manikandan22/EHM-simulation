@@ -159,6 +159,7 @@ class SmartGrid:
         battery.label = "Grid Battery"
         battery.battery_capacity = 150.0
         battery.battery_level = 0.75
+        battery.discharge_rate = 8.0  # MW discharge when needed
         battery.priority = 2
         battery.marginal_cost = 5.0
 
@@ -168,6 +169,7 @@ class SmartGrid:
         supercap.label = "Supercapacitor"
         supercap.supercap_capacity = 15.0
         supercap.supercap_level = 1.0
+        supercap.discharge_rate = 5.0
         supercap.priority = 1
         supercap.marginal_cost = 10.0
 
@@ -447,16 +449,22 @@ class SmartGrid:
             reverse_attrs['reverse_tie'] = True  # Mark as reverse tie edge
             self.graph.add_edge(v, u, **reverse_attrs)
 
-    def _get_active_directed_graph(self) -> nx.DiGraph:
-        """
-        Create a DiGraph with ONLY active edges for proper fault propagation.
-        This ensures descendants() only follows working power lines.
-        """
-        G = nx.DiGraph()
-        for u, v, d in self.graph.edges(data=True):
-            if d.get("active", True):  # ONLY active edges
-                G.add_edge(u, v, **d)
-        return G
+    def get_downstream_nodes(self, start):
+        visited = set()
+        stack = [start]
+
+        while stack:
+            node = stack.pop()
+
+            for _, child, data in self.graph.out_edges(node, data=True):
+                if not data.get("active", True):
+                    continue
+
+                if child not in visited:
+                    visited.add(child)
+                    stack.append(child)
+
+        return visited
 
     def move_node(self, node_id: str, new_x: float, new_y: float):
         """Updates spatial coordinates and dynamically recalcs edge physics based on stretching."""
@@ -633,8 +641,8 @@ class SmartGrid:
         # NOT LA0_1 (which is upstream)
         for nid, node in self.nodes.items():
             if node.failed:
-                # Get only downstream nodes using descendants
-                downstream = nx.descendants(segment_graph, nid)
+                # Get only downstream nodes using get_downstream_nodes (strict direction)
+                downstream = self.get_downstream_nodes(nid)
                 # Include the failed node itself
                 downstream.add(nid)
                 comp = frozenset(downstream)
@@ -644,8 +652,8 @@ class SmartGrid:
         for u, v, data in self.graph.edges(data=True):
             if not data.get("active") and not data.get("switch_type"):
                 if u in segment_graph:
-                    # Tripped cable affects downstream from the break point
-                    downstream = nx.descendants(segment_graph, u)
+                    # Tripped cable affects downstream from the break point using directional flow
+                    downstream = self.get_downstream_nodes(u)
                     downstream.add(u)
                     comp = frozenset(downstream)
                     faulted_segments.add(comp)
@@ -660,7 +668,7 @@ class SmartGrid:
             boundary_switches: list[tuple[str, str]] = []
 
             for u in comp:
-                for nbr in self.graph.neighbors(u):
+                for nbr in self.graph.successors(u):
                     if nbr not in comp:
                         edge_data = self.graph[u][nbr]
                         sw_type   = edge_data.get("switch_type")
@@ -693,193 +701,167 @@ class SmartGrid:
 
     def _simulate_energy_flow(self):
         """
-        2-Pass Forward/Backward Sweep DC Power Flow via Multi-Source BFS.
+        Backward Sweep Flow Algorithm (proper power flow for radial grids).
 
-        Dual-direction flow:
-          Tie switches that are CLOSED (active=True) are included in the
-          active_graph like any other edge. The SUPER_SOURCE trick means the BFS
-          finds the shortest path from ANY generator to ANY load node, regardless
-          of which side of the tie the power comes from.
-          This achieves bidirectional (dual-current) flow naturally.
+        Step 1: Compute demand bottom-up (backward sweep)
+        Step 2: Distribute power top-down (forward sweep)
+
+        This ensures proper flow splitting based on actual load demands,
+        not just equal division among children.
         """
-        self._isolate_fault_segments()
+        from collections import deque
 
-        # ── Reset flows ──
-        for _, _, data in self.graph.edges(data=True):
-            data["flow"] = 0.0
+        # -----------------------------
+        # 1. RESET FLOW (CRITICAL)
+        # -----------------------------
+        for u, v in self.graph.edges():
+            self.graph[u][v]["flow"] = 0.0
+            self.graph[u][v]["source_type"] = None
 
-        # ── Build active sub-graph ─────────────────────────────────────────────
-        # Include ONLY active edges in forward direction (parent → child).
-        # Tie switches are handled specially - only closed ties allow reverse flow.
-        # FIX: Use DiGraph to preserve flow direction (source → downstream)
-        active_graph = nx.DiGraph()
-        for u, v, data in self.graph.edges(data=True):
-            if (data.get("active", True)
-                    and not self.nodes[u].failed
-                    and not self.nodes[v].failed):
-                # Add forward edge only (parent → child)
-                active_graph.add_edge(u, v, **data)
-                # Only add reverse edge for closed tie switches (allows reverse power flow)
-                if data.get("is_tie_switch") and data.get("active"):
-                    active_graph.add_edge(v, u, **data)
+        for node_id, node in self.nodes.items():
+            # BATTERY DISCHARGE
+            if node.node_type == "battery" and getattr(node, "battery_level", 1.0) > 0.2:
+                rate = getattr(node, "discharge_rate", 5.0)
+                cap = getattr(node, "battery_capacity", 10.0)
+                discharge_mw = min(rate, getattr(node, "battery_level", 1.0) * cap)
+                node.generation += discharge_mw
+                node.battery_level = getattr(node, "battery_level", 1.0) - (discharge_mw / cap)
+                node.source_type = "battery"
 
-        # ── Multi-Source BFS tree using continuous SUPER_SOURCE ──
-        # Include all generator types: generator, generator_solar, generator_wind, etc.
-        generators = [n.node_id for n in self.nodes.values()
-                      if n.node_type in ("generator", "generator_solar", "generator_wind",
-                                         "generator_nuclear", "generator_coal", "generator_gas",
-                                         "solar", "wind", "battery")
-                      and not n.failed]
+            # SUPERCAPACITOR DISCHARGE
+            if node.node_type == "supercap" and getattr(node, "supercap_level", 1.0) > 0.1:
+                rate = getattr(node, "discharge_rate", 5.0)
+                cap = getattr(node, "supercap_capacity", 2.0)
+                discharge_mw = min(rate, getattr(node, "supercap_level", 1.0) * cap)
+                node.generation += discharge_mw
+                node.supercap_level = getattr(node, "supercap_level", 1.0) - (discharge_mw / cap)
+                node.source_type = "supercap"
 
-        # In order to do unified BFS where ties can push power backward, 
-        # we attach all generators to a virtual SUPER_SOURCE.
-        aug_graph = active_graph.copy()
-        aug_graph.add_node("SUPER_SOURCE")
-        for g in generators:
-            aug_graph.add_edge("SUPER_SOURCE", g, resistance=0.0)
-            self.nodes[g].voltage = 1.05  # Slack bus fixed voltage
+            # SOLAR
+            if node.node_type == "solar" or getattr(node, "source_type", "") == "solar":
+                node.generation = getattr(node, "solar_output", getattr(node, "generation", 5.0))
+                node.source_type = "solar"
 
-        tree_edges = []
+        # -----------------------------
+        # 2. FIND ALL SOURCES (MULTI-SOURCE)
+        # -----------------------------
+        sources = [
+            nid for nid, n in self.nodes.items()
+            if not n.failed and n.generation > 0.01
+        ]
+
+        if not sources:
+            return
+
+        # -----------------------------
+        # 3. BUILD TOPOLOGICAL ORDER (for backward sweep)
+        # -----------------------------
+        # Get all nodes in proper topological order: sources first, leaves last
+        # For power flow: generators -> substation -> transformer -> pole -> house
+        #
+        # We use a BFS from leaves UP to sources, then reverse to get proper order
+
+        # Find all leaf nodes (nodes with no successors = end of feeders)
+        leaves = [nid for nid in self.graph.nodes() if not list(self.graph.successors(nid))]
+
+        order = []
         visited = set()
-        queue = deque()
-
-        queue.append("SUPER_SOURCE")
-        visited.add("SUPER_SOURCE")
+        queue = deque(leaves)
 
         while queue:
-            curr = queue.popleft()
-            for nbr in aug_graph.neighbors(curr):
-                if nbr not in visited:
-                    visited.add(nbr)
-                    queue.append(nbr)
-                    # We don't record SUPER_SOURCE edges in the real physics tree
-                    if curr != "SUPER_SOURCE":
-                        tree_edges.append((curr, nbr))
-        
-        visited.remove("SUPER_SOURCE")
+            node = queue.popleft()
+            if node in visited:
+                continue
+            visited.add(node)
+            order.append(node)
 
-        # ── Pass 1: Backward Sweep — aggregate net demand bottom-up ──
-        # p_req[n] = net MW needed by node n and everything downstream of n.
-        # SIGNED: negative value = surplus generation at this node (solar/wind injection).
-        # Surplus propagates upstream, REDUCING the parent's net demand.
-        # This is what makes prosumer solar actually reduce feeder-head loading!
-        p_req: dict = {
-            nid: self.nodes[nid].load - self.nodes[nid].generation
-            for nid in visited
-        }
+            # Add predecessors (parents) to queue - go UP toward sources
+            for parent in self.graph.predecessors(node):
+                if parent not in visited:
+                    queue.append(parent)
 
-        for parent, child in reversed(tree_edges):
-            p_req[parent] = p_req.get(parent, 0.0) + p_req[child]
+        # Reverse to get top-down order (sources first, leaves last)
+        order.reverse()
 
-        # ── Pass 2: Forward Sweep — voltage drop and flow propagation ──
-        # net_pflow > 0  : forward flow   (load > gen)   → voltage drops along line
-        # net_pflow < 0  : reverse flow   (gen > load)   → solar/wind injecting upstream
-        #                   Reverse flow causes slight voltage RISE at injection point
-        for parent, child in tree_edges:
-            net_pflow  = p_req.get(child, 0.0)          # signed MW
-            pflow_abs  = abs(net_pflow)                  # magnitude for physics
-            is_reverse = net_pflow < 0                   # True if net solar injection
+        # -----------------------------
+        # 4. BACKWARD SWEEP: Compute total demand at each node
+        # -----------------------------
+        total_demand = {}
 
-            data   = active_graph[parent][child]
-            res    = data.get("resistance", 0.05)
-            cap    = data.get("capacity",   1.0)
-            v_par  = max(0.01, self.nodes[parent].voltage)
+        for node in order:
+            node_obj = self.nodes[node]
+            # Node's own load
+            node_load = getattr(node_obj, 'load', 0) or 0
 
-            # DC voltage physics:
-            #   Forward flow : V_child = V_parent - (|P| × R) / V_parent   (voltage drop)
-            #   Reverse flow : V_child = V_parent + (|P| × R × 0.5) / V_parent (mild rise)
-            v_delta = (pflow_abs * res) / v_par
-            if is_reverse:
-                self.nodes[child].voltage = round(min(1.10, v_par + v_delta * 0.5), 4)
-            else:
-                self.nodes[child].voltage = round(max(0.0, v_par - v_delta), 4)
+            # Sum of children's demands (outgoing edges)
+            children_demand = 0.0
+            for child in self.graph.successors(node):
+                edge = self.graph[node][child]
+                if edge.get("active", True):
+                    children_demand += total_demand.get(child, 0.0)
 
-            # Write signed flow to graph edge (negative = reverse / solar injection)
-            self.graph[parent][child]["flow"] = round(net_pflow, 4)
-            # Track source type for frontend coloring - determine which generator supplies this edge
-            parent_node = self.nodes.get(parent)
-            if parent_node and parent_node.source_type:
-                self.graph[parent][child]["source_type"] = parent_node.source_type
-            elif parent_node and parent_node.node_type:
-                self.graph[parent][child]["source_type"] = parent_node.node_type
-            try:
-                self.graph[child][parent]["flow"] = round(net_pflow, 4)
-            except (KeyError, Exception):
-                pass
+            total_demand[node] = node_load + children_demand
 
-            # Energy loss: I²R — always based on magnitude
-            self.total_energy_loss += (pflow_abs ** 2 / max(v_par ** 2, 0.01)) * res * 0.01
+        # -----------------------------
+        # 5. FORWARD SWEEP: Distribute power from sources
+        # -----------------------------
+        # Process in forward topological order (sources first)
+        for node in reversed(order):
+            node_obj = self.nodes[node]
+            node_gen = getattr(node_obj, 'generation', 0) or 0
 
-            # Overload detection: magnitude against cable capacity
-            if pflow_abs > cap:
-                ratio = pflow_abs / cap
-                self.nodes[child].stress_level = min(1.0, ratio - 1.0 + self.nodes[child].stress_level)
-                if ratio > 1.4:   # 40% overload → protection relay trips
-                    self.graph[parent][child]["active"] = False
-                    self.graph[parent][child]["switch_status"] = "open"
-                    
-                    edge_data = self.graph[parent][child]
-                    if edge_data.get("switch_type") == "recloser" and not edge_data.get("locked_out"):
-                        delay = edge_data.get("reclose_delay", 2)
-                        attempts = edge_data.get("reclose_attempts", 0)
-                        self.reclose_queue[(parent, child)] = (self.timestep + delay, attempts)
-                        
-                    self.event_log.append(
-                        f"⚡ Relay trip: {parent}→{child} ({pflow_abs:.2f}/{cap:.2f} MW) "
-                        f"— overcurrent protection operated."
-                    )
+            if node_gen <= 0:
+                continue
 
-        # ── Load Aggregation: substations & transformers see total feeder demand ──
-        for nid in visited:
+            # Distribute this node's generation to its children based on their demands
+            node_demand = total_demand.get(node, 0)
+
+            if node_demand <= 0:
+                continue
+
+            # Children that need power
+            children = [
+                c for c in self.graph.successors(node)
+                if self.graph[node][c].get("active", True) and total_demand.get(c, 0) > 0
+            ]
+
+            if not children:
+                continue
+
+            for child in children:
+                edge = self.graph[node][child]
+                child_demand = total_demand.get(child, 0)
+
+                # Flow = portion of generation proportional to child's demand
+                flow = (child_demand / node_demand) * node_gen
+
+                edge["flow"] += flow
+                self.graph[node][child]["source_type"] = getattr(node_obj, "source_type", "none")
+
+        # -----------------------------
+        # 6. Track received power & mark isolated nodes
+        # -----------------------------
+        energized = set()
+        for source in sources:
+            energized.update(self.get_downstream_nodes(source))
+            energized.add(source)
+
+        # Track received power at each node for visualization
+        for nid in self.nodes:
             node = self.nodes[nid]
-            if node.node_type in ("substation", "transformer", "step_up"):
-                node.load = round(p_req.get(nid, node.load), 4)
-
-        # ── Nodes outside the active BFS tree are powered off ──
-        for nid in set(self.nodes.keys()) - visited:
-            node = self.nodes[nid]
-            if not node.failed:
-                node.isolated = True
-                node.voltage      = 0.0
-                node.stress_level = 1.0
-            else:
+            if nid in energized and not node.failed:
                 node.isolated = False
-                
-        for nid in visited:
-            if not self.nodes[nid].failed:
-                self.nodes[nid].isolated = False
-
-        # ── Voltage violation detection & Supercap Support ──────────
-        for nid in visited:
-            v = self.nodes[nid].voltage
-            label = self.nodes[nid].label or nid
-            
-            # STEP 3 — SUPERCAPACITOR (instant voltage stabilization)
-            # NOT for energy balance. Just flashes voltage up +0.02
-            if v < 0.94 and self.nodes[nid].supercap_level > 0.1:
-                self.nodes[nid].voltage = min(1.0, v + 0.02)
-                self.nodes[nid].supercap_level = max(0.0, self.nodes[nid].supercap_level - 0.1)
-                v = self.nodes[nid].voltage  # local loop ref
-                if random.random() < 0.2:
-                    self.event_log.append(
-                        f"⚡ Supercap stabilization at {label} [{nid}] -> Boosted V by +0.02 pu"
-                    )
-
-            if 0.0 < v < 0.95:
-                pri   = self.nodes[nid].priority
-                tag   = "🏥 CRITICAL" if pri == 1 else ("🏭 COMMERCIAL" if pri == 2 else "🏠 RESIDENTIAL")
-                if random.random() < 0.05:
-                    self.event_log.append(
-                        f"⚠️ Low voltage at {label} [{nid}] — {v:.4f} pu < 0.95 pu  {tag}"
-                    )
-            
-            # Solar Support Logic — log if a node's solar injection is visibly keeping its voltage afloat
-            elif v >= 0.95 and self.nodes[nid].generation > 0.15 and "H" in nid:
-                # Randomly sample the log so we don't spam the UI every tick
-                if random.random() < 0.05:
-                    self.event_log.append(
-                        f"☀️ Solar at {label} [{nid}] injecting {self.nodes[nid].generation:.2f} MW — supporting local voltage envelope"
-                    )
+                # received_power = total power arriving at this node
+                received = 0.0
+                for pred in self.graph.predecessors(nid):
+                    edge = self.graph[pred][nid]
+                    if edge.get("active", True):
+                        received += edge.get("flow", 0)
+                node.received_power = max(0.0, received)
+            else:
+                node.isolated = True
+                node.voltage = 0.0
+                node.received_power = 0.0
 
 
 
@@ -1120,29 +1102,37 @@ class SmartGrid:
             self.event_log.append(f"🔄 Closed {balanced} tie-switches for load balancing.")
 
     def inject_failure(self, node_id: str) -> str:
-        """
-        Fail a node and let segment isolation + FLISR do the rest.
-
-        CRITICAL FIX: The old approach blindly opened ALL edges of the failed node.
-        This was the root cause of cascade isolation — it prevented
-        _isolate_fault_segments() from correctly reading segment boundaries,
-        causing innocent lateral branches to be marked inactive.
-
-        Correct approach:
-          1. Mark the node as failed (hardware fault flag only).
-          2. _isolate_fault_segments() (called in _simulate_energy_flow) will
-             identify the exact segment bounded by switches and open ONLY those
-             boundary sectionalizers/reclosers.
-          3. FLISR closes tie switches to restore healthy isolated clusters.
-        """
         if node_id not in self.nodes:
             return f"Unknown node: {node_id}"
 
-        self.nodes[node_id].fail()
+        self.nodes[node_id].failed = True
+
+        # disable ALL connected edges
+        for nbr in list(self.graph.successors(node_id)):
+            self.graph[node_id][nbr]["active"] = False
+            self.graph[node_id][nbr]["switch_status"] = "fault_locked"
+
+        for nbr in list(self.graph.predecessors(node_id)):
+            self.graph[nbr][node_id]["active"] = False
+            self.graph[nbr][node_id]["switch_status"] = "fault_locked"
+
+        # Mark downstream as isolated
+        downstream = self.get_downstream_nodes(node_id)
+        for n in downstream:
+            self.nodes[n].isolated = True
+
         msg = f"⚠️ Node {node_id} FAILED — segment isolation + FLISR triggered."
         self.event_log.append(msg)
         self.event_log = self.event_log[-20:]  # type: ignore
         return msg
+
+    def random_failure(self) -> str:
+        """Inject a random failure on a pole node for demo purposes."""
+        poles = [nid for nid, n in self.nodes.items() if n.node_type == "pole" and not n.failed]
+        if not poles:
+            return "No healthy poles available for random failure."
+        target = random.choice(poles)
+        return self.inject_failure(target)
 
     def _reroute(self, failed_node_id: str) -> str:
         """
@@ -1352,7 +1342,7 @@ class SmartGrid:
 
     def restore_node(self, node_id: str) -> str:
         """
-        Recover a failed/isolated node.
+        Recover a failed/isolated node AND its downstream nodes.
 
         Switch State Machine:
           fault_locked → closed   (sectionalizer / recloser that isolated the fault)
@@ -1363,20 +1353,28 @@ class SmartGrid:
             return f"Unknown node: {node_id}"
 
         self.nodes[node_id].recover()
+        self.nodes[node_id].isolated = False
 
-        for neighbour in self.graph.neighbors(node_id):
-            edge = self.graph[node_id][neighbour]
-            edge["active"] = True
-            
+        # Restore all downstream nodes (from the failed segment)
+        for nid in self.nodes:
+            if self.nodes[nid].isolated:
+                self.nodes[nid].isolated = False
+
+        # Reactivate ALL switches EXCEPT tie switches
+        for u, v, data in self.graph.edges(data=True):
+            if data.get("is_tie_switch"):
+                data["active"] = False
+            else:
+                data["active"] = True
+
         # Check if grid has any remaining faults
         if not any(n.failed for n in self.nodes.values()):
             # If healthy, proactively reset all protection relays / boundary switches
-            # This ensures the ENTIRE segment bounds are restored, not just the local drop line.
             self.reset_all_switches()
             msg = f"✅ Node {node_id} restored to service. Grid healthy, protection relays reset."
         else:
             msg = f"🔧 Node {node_id} restored to service. Other active faults remain."
-            
+
         self.event_log.append(msg)
         return msg
 
@@ -1431,18 +1429,22 @@ class SmartGrid:
     # ------------------------------------------------------------------
 
     def increase_generation(self, amount: float = 0.3):
-        """Boost generation on all non-failed substations."""
+        """Boost generation on solar, wind, and substations."""
+        count = 0
         for nid, node in self.nodes.items():
-            if node.node_type == "substation" and not node.failed:
+            if node.node_type in ["solar", "wind", "substation"] and not node.failed:
                 node.generation = min(2.5, node.generation + amount)
-        return f"⚡ Generation increased by {amount} MW on all substations."
+                count += 1
+        return f"⚡ Generation increased by {amount} MW on {count} generation nodes."
 
     def increase_demand(self, amount: float = 0.2):
-        """Simulate demand surge across house nodes."""
+        """Simulate demand surge across house, hospital, and industry nodes."""
+        count = 0
         for nid, node in self.nodes.items():
-            if node.node_type == "house" and not node.failed:
+            if node.node_type in ["house", "hospital", "industry"] and not node.failed:
                 node.load = min(2.0, node.load + amount)
-        return f"📈 Demand increased by {amount} MW across all houses."
+                count += 1
+        return f"📈 Demand increased by {amount} MW across {count} load nodes."
 
     def heal_all(self):
         """Restore all failed/isolated nodes to healthy state."""
@@ -1498,6 +1500,7 @@ class SmartGrid:
                 "target":        v,
                 "capacity":      data.get("capacity", 1.0),
                 "flow":          data.get("flow", 0.0),
+                "source_type":   data.get("source_type", None),
                 "active":        data.get("active", True),
                 "is_tie_switch": data.get("is_tie_switch", False),
                 "has_switch":    data.get("has_switch", False),
@@ -1514,6 +1517,10 @@ class SmartGrid:
         avg_voltage   = sum(n.voltage  for n in active_nodes) / max(len(active_nodes), 1)
         avg_freq      = sum(n.frequency for n in active_nodes) / max(len(active_nodes), 1)
         health_score  = max(0.0, 1.0 - sum(n.stress_level for n in self.nodes.values()) / len(self.nodes))
+
+        # Count failed vs isolated (not both)
+        failed_count = sum(1 for n in self.nodes.values() if n.failed)
+        isolated_count = sum(1 for n in self.nodes.values() if n.isolated and not n.failed)
 
         # Edge-based flow for animation (already edge-level, not route-based)
         active_paths = self.get_active_paths()
@@ -1533,6 +1540,8 @@ class SmartGrid:
                 "avg_frequency":    round(float(avg_freq),    4),   # type: ignore
                 "health_score":     round(float(health_score),4),   # type: ignore
                 "total_energy_loss":round(float(self.total_energy_loss), 4),  # type: ignore
+                "failed_count":     failed_count,
+                "isolated_count":   isolated_count,
             },
             "recent_events": self.event_log[-5:],  # type: ignore
         }
@@ -1613,7 +1622,7 @@ class SmartGrid:
             
             while queue:
                 current = queue.popleft()
-                for neighbor in self.graph.neighbors(current):
+                for neighbor in self.graph.successors(current):
                     if neighbor not in visited:
                         edge_data = self.graph[current][neighbor]
                         if edge_data.get("active", True):
