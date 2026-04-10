@@ -54,6 +54,11 @@ async def lifespan(app: FastAPI):
     app.state.scada = ScadaControlCenter()
     app.state.scada.warmup_ai(g)  # Pre-train RL agent on grid bounds
 
+    # 🔥 CRITICAL FIX — INITIAL ENERGY FLOW
+    for _ in range(3):
+        g.update_generation()
+        g.update_power_flow()
+
     print("\n[OK] All systems ready.\n")
     print("=" * 60)
 

@@ -146,16 +146,30 @@ class FaultDetector:
     def _anomaly_score(node) -> float:
         """
         3-component score:
-          voltage deviation  (nominal = 1.0, dead-band ±0.05)
-          frequency deviation (nominal = 50, dead-band ±0.3 Hz)
-          load-generation imbalance ratio
+          voltage deviation   (nominal = 1.0, dead-band +/-0.05)
+          frequency deviation (nominal = 50 Hz, dead-band +/-0.3 Hz)
+          load-supply imbalance ratio
+
+        KEY FIX: Houses/poles/transformers are GRID-FED — they receive power
+        via received_power from the substation. Imbalance = load not covered
+        by total supply (local generation + received_power from grid).
+        Without this fix, houses score imb=1.0 at night → false fault alarms.
         """
         v_dev = max(0.0, abs(node.voltage - 1.0) - 0.05) / 0.15
         f_dev = max(0.0, abs(node.frequency - 50.0) - 0.3) / 2.0
-        if node.generation > 0.01:
-            imb  = max(0.0, (node.load - node.generation) / max(node.load, 0.01))
+
+        # Total supply = local generation + power received from grid upstream
+        total_supply = node.generation + getattr(node, 'received_power', 0.0)
+
+        if total_supply > 0.01:
+            # Node has supply — only flag if load greatly exceeds it
+            imb = max(0.0, (node.load - total_supply) / max(node.load, 0.01))
+            imb = min(imb, 0.5)   # cap at 0.5 — partial supply is not a hard fault
+        elif node.load > 0.1 and not getattr(node, 'isolated', False):
+            # No supply and not isolated — genuine fault signal
+            imb = 0.6
         else:
-            imb  = 1.0 if node.load > 0.1 else 0.0
+            imb = 0.0
 
         score = (0.35 * v_dev + 0.30 * f_dev + 0.35 * imb)
         return float(min(1.0, score))

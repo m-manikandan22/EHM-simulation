@@ -1,20 +1,3 @@
-/**
- * Dashboard.jsx — Main 3-panel dashboard page.
- *
- * Layout:
- *  [LEFT]  ControlPanel  — 280px fixed
- *  [CENTER] GridGraph    — flex 1
- *  [RIGHT] AIDecisionPanel — 300px fixed
- *
- * Polling:
- *  - Calls /simulate every 2 seconds (auto-step)
- *  - Allows manual pause via button
- *
- * State management:
- *  - gridState: full grid snapshot from backend
- *  - aiState: { latest: {...}, log: [...] }
- */
-
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { simulate, getState, triggerEvent, cutEdge, resetGrid, addHouseAPI } from '../services/api'
 import ControlPanel from '../components/ControlPanel'
@@ -40,22 +23,36 @@ export default function Dashboard() {
   const [statusMsg, setStatusMsg]   = useState('')
   const [selectedNode, setSelectedNode] = useState('H0')
   const [selectedEdge, setSelectedEdge] = useState(null)
-  
+
   // CAD Mode State
   const [currentMode, setCurrentMode] = useState(MODES.SELECT)
   const [addNodeType, setAddNodeType] = useState('house')
   const [interactionState, setInteractionState] = useState({})
-  const [showFlow, setShowFlow] = useState(true)
-  const [faultSimMode, setFaultSimMode] = useState(false)
-  const [aiAssistMode, setAiAssistMode] = useState(false)
-  
+
   const timerRef = useRef(null)
 
   // ── Load initial state ─────────────────────────────────────────────
   useEffect(() => {
-    getState()
-      .then(s => { setGridState(s); setBackendOk(true) })
-      .catch(() => setBackendOk(false))
+    const loadInitial = async () => {
+      try {
+        const sim = await simulate()
+        setGridState(sim.grid)
+        setBackendOk(true)
+        if (sim.ai) pushToLog(sim.ai, sim.grid.timestep)
+      } catch (e) {
+        setBackendOk(false)
+      }
+    }
+    loadInitial()
+  }, [])
+
+  // ── Global Escape Key Handler ──────────────────────────────────────
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape") setCurrentMode(MODES.SELECT)
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
   }, [])
 
   // ── AI log updater ─────────────────────────────────────────────────
@@ -76,10 +73,6 @@ export default function Dashboard() {
   // ── Simulation step ────────────────────────────────────────────────
   const doStep = useCallback(async () => {
     try {
-      if (faultSimMode && Math.random() < 0.15) {
-         // Randomly inject a storm/fault during faultSimMode simulation
-         await triggerEvent('storm')
-      }
       const result = await simulate()
       setGridState(result.grid)
       setBackendOk(true)
@@ -87,7 +80,7 @@ export default function Dashboard() {
     } catch {
       setBackendOk(false)
     }
-  }, [pushToLog, faultSimMode])
+  }, [pushToLog])
 
   // ── Auto-poll ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -111,6 +104,10 @@ export default function Dashboard() {
       const result = await triggerEvent('failure', nid)
       setGridState(result.grid)
       handleMessage(result.message)
+
+      // 🔥 FORCE REAL UPDATE
+      const sim = await simulate();
+      setGridState(sim.grid);
     } catch (e) {
       handleMessage('❌ Error: ' + (e?.response?.data?.detail || e.message))
     }
@@ -122,6 +119,10 @@ export default function Dashboard() {
       setGridState(result.grid)
       handleMessage(result.message)
       setSelectedEdge(null)
+
+      // 🔥 FORCE REAL UPDATE
+      const sim = await simulate();
+      setGridState(sim.grid);
     } catch (e) {
       handleMessage('❌ Error: ' + (e?.response?.data?.detail || e.message))
     }
@@ -131,7 +132,12 @@ export default function Dashboard() {
     try {
       const result = await resetGrid()
       setGridState(result)
-      handleMessage('Grid Reset Successfully.')
+
+      // ✅ Force a physics step to propagate flow
+      const stepResult = await simulate()
+      setGridState(stepResult.grid)
+
+      handleMessage('Grid Reset Successfully. Flow restored.')
       setCurrentMode(MODES.SELECT)
       setInteractionState({})
     } catch (e) {
@@ -144,6 +150,10 @@ export default function Dashboard() {
       const result = await addHouseAPI(node_id)
       setGridState(result.grid)
       handleMessage(result.message)
+
+      // 🔥 FORCE REAL UPDATE
+      const sim = await simulate();
+      setGridState(sim.grid);
     } catch (e) {
       handleMessage('❌ Error adding house: ' + (e?.response?.data?.detail || e.message))
     }
@@ -230,7 +240,7 @@ export default function Dashboard() {
           )}
           {storm && <span className="badge badge-yellow">🌩️ STORM</span>}
           {failedCount > 0 && (
-            <span className="badge badge-red pulse-red">⚠️ {failedCount} FAILED</span>
+             <span className="badge badge-red pulse-red">⚠️ {failedCount} FAILED</span>
           )}
           {failedCount === 0 && !storm && (
             <span className="badge badge-green">
@@ -263,9 +273,6 @@ export default function Dashboard() {
           currentMode={currentMode} setCurrentMode={setCurrentMode}
           addNodeType={addNodeType} setAddNodeType={setAddNodeType}
           running={running} setRunning={setRunning}
-          showFlow={showFlow} setShowFlow={setShowFlow}
-          faultSimMode={faultSimMode} setFaultSimMode={setFaultSimMode}
-          aiAssistMode={aiAssistMode} setAiAssistMode={setAiAssistMode}
           onReset={handleReset} loading={!gridState}
         />
       </div>
@@ -364,8 +371,8 @@ export default function Dashboard() {
           {/* Graph area */}
           <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             {gridState ? (
-              <GridGraph 
-                gridState={gridState} 
+              <GridGraph
+                gridState={gridState}
                 aiState={aiState.latest}
                 selectedNode={selectedNode}
                 onSelectNode={setSelectedNode}
@@ -374,14 +381,12 @@ export default function Dashboard() {
                 onFailNode={handleFailNode}
                 onCutEdge={handleCutEdge}
                 onAddHouse={handleAddHouse}
-                
+
                 // CAD Mode Injection
                 currentMode={currentMode}
                 addNodeType={addNodeType}
                 interactionState={interactionState}
                 setInteractionState={setInteractionState}
-                showFlow={showFlow}
-                aiAssistMode={aiAssistMode}
                 onMessage={handleMessage}
                 onUpdate={handleUpdate}
               />

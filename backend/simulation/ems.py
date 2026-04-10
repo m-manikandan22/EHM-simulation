@@ -138,15 +138,15 @@ class EnergyManagementSystem:
         total_load = sum(n.load       for n in active_nodes)
         balance    = total_gen - total_load
 
-        # ── A. Partial solar absorption (excess → battery, 50 % only) ──────
-        if balance > EXCESS_THRESHOLD_MW:
+        # 🟢 SCENARIO: SURPLUS (Boot Generation) -> STORE IT
+        if balance > 0.5:
             self._charge_storage(grid, active_nodes, balance)
+            self.ems_log.append(f"🔋 Surplus detected: Storing {balance:.2f} MW in Storage Stack")
 
-        # ── B. Source Priority Dispatch (Deficit management) ─────────────
-        elif balance < -DEFICIT_THRESHOLD_MW:
-            # Only run rule-based if PyPSA didn't handle it
-            if pypsa_result is None or pypsa_result.battery_dispatch <= 0.01:
-                self._source_priority_dispatch(grid, active_nodes, abs(balance))
+        # 🔴 SCENARIO: DEFICIT (High Demand) -> DRAW IT
+        elif balance < -0.2:
+            self.ems_log.append(f"🚨 Deficit detected: Withdrawing from Storage")
+            # Draw from Supercaps for immediate spike
             self._priority_energy_allocation(grid, active_nodes, abs(balance))
 
         # ── C. Peer-to-peer residual sharing ─────────────────────────────
@@ -218,74 +218,35 @@ class EnergyManagementSystem:
         3. Coal (Conventional, fast ramping)
         4. Nuclear (Baseload, slow/no ramping)
         """
-        covered = 0.0
+        deficit = deficit_mw * 1.0
 
-        # ── 1. Dispatch Batteries (Storage) ──
-        # EMS only drains batteries down to EMS_NORMAL_RESERVE (40%) and reserves the rest for FLISR
-        storage_targets = sorted(
-            [n for n in active_nodes if (n.source_type == "battery" or n.battery_level > EMS_NORMAL_RESERVE)],
-            key=lambda n: (n.role != "storage", -n.battery_level)
-        )
-        discharged_count = 0
-        for node in storage_targets:
-            if covered >= deficit_mw:
-                break
-            # Grid scale battery (BAT0) has higher discharge rate
-            rate = BATTERY_DISCHARGE_RATE * 5 if node.source_type == "battery" else BATTERY_DISCHARGE_RATE
-            want = min(rate, deficit_mw - covered)
-            if node.source_type == "battery":
-                # Grid-scale battery: deplete SOC AND inject as generation into the grid
-                available = node.battery_capacity * node.battery_level
-                delivered = min(want, available)
-                node.battery_level = max(0.0, node.battery_level - delivered / node.battery_capacity)
-                # ✅ KEY FIX: inject as generation so BFS flow engine sees real power
-                node.generation = round(min(node.battery_capacity, node.generation + delivered), 4)
-                # Set source_type so flow engine can track battery source
-                node.source_type = "battery"
-            else:
-                delivered = node.use_battery(want)
-            
-            if delivered > 0.001:
-                covered += delivered
-                discharged_count += 1
+        generators = [n for n in active_nodes if n.node_type == "generator"]
+        batteries = [n for n in active_nodes if n.node_type == "battery"]
+        supercaps = [n for n in active_nodes if n.node_type == "supercap"]
 
-        if discharged_count:
-            self.ems_log.append(f"🔋 EMS dispatched {covered:.2f} MW from {discharged_count} batteries (Priority 1).")
+        # 1. GENERATION FIRST
+        if deficit > 0:
+            for gen in generators:
+                ramp = min(deficit, 1.0)
+                gen.generation += ramp
+                deficit -= ramp
 
-        # ── 2. Ramp Generators (Coal then Nuclear) ──
-        if deficit_mw - covered > GEN_RAMP_THRESHOLD_MW:
-            ramped = []
-            remaining_deficit = deficit_mw - covered
-            
-            gens_by_priority = sorted(
-                [n for n in active_nodes if n.node_type == "generator"],
-                key=lambda n: 0 if n.source_type == "coal" else 1 if n.source_type == "nuclear" else 2
-            )
-            
-            for gen in gens_by_priority:
-                if remaining_deficit <= 0:
-                    break
-                # Only ramp coal / nuclear
-                if gen.source_type not in ("coal", "nuclear"):
-                    continue
-                
-                # Coal ramps faster than nuclear
-                ramp_step = GEN_RAMP_STEP_MW * 1.5 if gen.source_type == "coal" else GEN_RAMP_STEP_MW * 0.5
-                max_out = MAX_GENERATOR_OUTPUT if gen.source_type == "coal" else MAX_GENERATOR_OUTPUT * 1.5
-                
-                if gen.generation < max_out:
-                    headroom = max_out - gen.generation
-                    ramp = min(ramp_step, headroom, remaining_deficit)
-                    gen.generation = round(min(max_out, gen.generation + ramp), 4)
-                    gen._base_generation = gen.generation
-                    ramped.append(f"{gen.node_id}({gen.source_type})+{ramp:.2f}MW")
-                    remaining_deficit -= ramp
-                    covered += ramp
-                    
-            if ramped:
-                self.ems_log.append(
-                    f"🏭 EMS generator dispatch: {', '.join(ramped)} (Priority 2/3)"
-                )
+        # 2. BATTERY (STABLE ENERGY)
+        if deficit > 0:
+            for bat in batteries:
+                power = bat.use_battery(min(deficit, 2.0))
+                if power > 0:
+                    bat.generation += power
+                    deficit -= power
+                    self.ems_log.append(f"🔋 Battery used {power:.2f} MW")
+
+        # 3. SUPERCAP (SPIKE ONLY)
+        if grid.avg_frequency < 49.5:
+            for sc in supercaps:
+                power = sc.use_supercapacitor(0.5)
+                if power > 0:
+                    sc.generation += power
+                    self.ems_log.append(f"⚡ Supercap spike {power:.2f} MW")
 
     def _priority_energy_allocation(self, grid: "SmartGrid", active_nodes: list, deficit_mw: float):
         """

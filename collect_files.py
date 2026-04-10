@@ -6,7 +6,7 @@ OUTPUT_FILE = os.path.join(ROOT, "all_files.txt")  # unified name
 # Extensions to include
 INCLUDE_EXTS = {
     ".py", ".js", ".jsx", ".ts", ".tsx",
-    ".css", ".html", ".json", ".txt",
+    ".css", ".html", ".json",
     ".cfg", ".ini", ".env",
     ".yaml", ".yml", ".toml",
     ".sh", ".bat", ".vue"

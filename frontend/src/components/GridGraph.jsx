@@ -69,7 +69,7 @@ function getNodeColor(node) {
   // 🔴 Hard fault — root-cause node that failed
   if (node.failed) return '#ff3333'
   // 🟠 Isolated — downstream of fault, awaiting FLISR restoration
-  if (node.isolated) return '#ff6600'
+  if (node.isolated) return '#ff9900'
   // SCADA node is purely decorative
   if (node.is_scada) return 'none'
   // 🟡 Under-voltage warning (< 0.95 pu) — physics-driven stress indicator
@@ -148,8 +148,6 @@ export default function GridGraph({
   addNodeType,
   interactionState,
   setInteractionState,
-  showFlow,
-  aiAssistMode,
   onMessage,
   onUpdate,
 }) {
@@ -176,49 +174,81 @@ export default function GridGraph({
     resize()
     window.addEventListener('resize', resize)
 
-    const drawEnergyFlow = (ctx, edge, time, transform) => {
-      const flowVal = Math.abs(edge.flow || 0)
-      if (flowVal <= 0.001 || !edge.active) return
+    const FLOW_THRESHOLD = 0.02;  // ignore tiny noise / phantom flow
 
-      let fromNode = edge.source
-      let toNode = edge.target
-      
-      if (edge.flow < 0) {
-          fromNode = edge.target
-          toNode = edge.source
+    const colorMap = {
+      solar:   '#FFD700',
+      wind:    '#87CEEB',
+      battery: '#cc44ff',
+      supercap:'#cc44ff',
+      nuclear: '#3b82f6',
+      coal:    '#888888',
+      gas:     '#ff6633',
+      reroute: '#f59e0b',
+      grid:    '#00FFCC',
+    };
+
+    const drawEnergyFlow = (ctx, edge, time, transform, nodeMap) => {
+      // Safely resolve source/target (D3 may give objects or string IDs)
+      const source = typeof edge.source === 'string'
+        ? nodeMap.get(edge.source)
+        : edge.source;
+      const target = typeof edge.target === 'string'
+        ? nodeMap.get(edge.target)
+        : nodeMap.get(edge.target.id) || edge.target; // ensure target
+
+      if (!source || !target) return; // SAFEGUARD
+
+      const flow = Math.abs(edge.flow || 0);
+      if (flow < FLOW_THRESHOLD || !edge.active) return;
+
+      const x1 = source.x * transform.k + transform.x;
+      const y1 = source.y * transform.k + transform.y;
+      const x2 = target.x * transform.k + transform.x;
+      const y2 = target.y * transform.k + transform.y;
+
+      if (!isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2)) return;
+
+      // ── Color logic ──────────────────────────────────────────
+      let color = colorMap[edge.source_type] || '#00FFCC';
+
+      if (edge.charging) {
+        // CHARGING: amber pulse — surplus power flowing INTO storage
+        color = '#f59e0b';
+        ctx.shadowBlur = 10 * transform.k;
+        ctx.shadowColor = '#f59e0b';
+      } else if (edge.is_tie_switch && edge.active) {
+        // TIE-LINE REROUTE: bright green
+        color = '#22c55e';
+        ctx.shadowBlur = 6 * transform.k;
+        ctx.shadowColor = '#22c55e';
+      } else if (edge.status === 'rerouted') {
+        color = '#f59e0b';
+        ctx.shadowBlur = 8 * transform.k;
+        ctx.shadowColor = '#f59e0b';
+      } else {
+        ctx.shadowBlur = 0;
       }
 
-      const x1 = transform.applyX(fromNode.x)
-      const y1 = transform.applyY(fromNode.y)
-      const x2 = transform.applyX(toNode.x)
-      const y2 = transform.applyY(toNode.y)
+      // ── Thickness: physics-driven ─────────────────────────────
+      ctx.lineWidth = (1 + flow * 1.2) * transform.k;
 
-      const colorMap = {
-          "solar": "#FFD700",
-          "wind": "#87CEEB",
-          "battery": "#9370DB",
-          "supercap": "#FF4500",
-          "coal": "#8B4513",
-          "nuclear": "#32CD32"
-      }
-      
-      const sourceType = edge.source_type || fromNode.node_type || "grid"
-      const color = colorMap[sourceType] || "#4da6ff"
+      // ── Speed: charging is slower pulse, discharge is faster ──
+      ctx.setLineDash([8, 6]);
+      const speed = edge.charging
+        ? (time * 0.012)                        // slow amber charge
+        : -(time * (0.015 + flow * 0.02));      // normal forward flow
+      ctx.lineDashOffset = speed;
 
-      ctx.beginPath()
-      ctx.strokeStyle = color
-      ctx.lineWidth = Math.min(10, 2 + (flowVal * 2))
-      ctx.globalAlpha = 0.9
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
 
-      ctx.setLineDash([15, 10])
-      ctx.lineDashOffset = -(performance.now() / 20)
-
-      ctx.moveTo(x1, y1)
-      ctx.lineTo(x2, y2)
-      ctx.stroke()
-      
-      ctx.setLineDash([])
-    }
+      ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
+    };
 
     const animate = () => {
       time += 16
@@ -226,16 +256,19 @@ export default function GridGraph({
       ctx.clearRect(0, 0, width, height)
 
       const links = dataRef.current.links || []
+      const nodes = dataRef.current.nodes || []
       const svgNode = svgRef.current
       if (!svgNode) {
           animationFrameId = requestAnimationFrame(animate)
           return
       }
       const transform = d3.zoomTransform(svgNode)
-      
+
+      const nodeMap = new Map(nodes.map(n => [n.id, n]))
+
       links.forEach(edge => {
-        if (Math.abs(edge.flow || 0) > 0.001) {
-          drawEnergyFlow(ctx, edge, time, transform)
+        if (Math.abs(edge.flow || 0) > FLOW_THRESHOLD) {
+          drawEnergyFlow(ctx, edge, time, transform, nodeMap)
         }
       })
 
@@ -259,36 +292,21 @@ export default function GridGraph({
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedEdge, onCutEdge])
 
-  // ── AI Assist Mode Fetch ──────────────────────────────────────────
-  useEffect(() => {
-    if (!aiAssistMode) {
-      setSuggestions([])
-      return
-    }
-    const fetchSugg = async () => {
-      try {
-        const res = await getAISuggestions()
-        setSuggestions(res.suggestions || [])
-      } catch (e) {}
-    }
-    fetchSugg()
-    const int = setInterval(fetchSugg, 10000)
-    return () => clearInterval(int)
-  }, [aiAssistMode])
+
 
   // ── Flow Status Detection ───────────────────────────────────────────
   useEffect(() => {
     if (!gridState) return
+    const edges = gridState.edges || []
+    const hasFlow = edges.some(e => Math.abs(e.flow || 0) > 0.01)
+
     const nodes = Object.values(gridState.nodes || {})
-    const failedNodes = nodes.filter(n => n.failed || n.isolated)
-    const activePaths = gridState.active_paths || []
-    const hasFault = failedNodes.length > 0 || gridState.storm_active
-    const hasActiveFlow = activePaths.length > 0
+    const hasFault = nodes.some(n => n.failed) || gridState.storm_active
 
     if (hasFault) {
-      setFlowStatus(hasActiveFlow ? 'rerouting' : 'stopped')
+      setFlowStatus(hasFlow ? 'rerouting' : 'stopped')
     } else {
-      setFlowStatus(hasActiveFlow ? 'flowing' : 'no-flow')
+      setFlowStatus(hasFlow ? 'flowing' : 'INITIALIZING') // 🔄 Replaces no-flow with initializing state
     }
   }, [gridState])
 
@@ -485,9 +503,9 @@ export default function GridGraph({
         else if (d.source.node_type === 'pole' && d.target.node_type === 'pole') baseWidth = 3.0
         else if (d.source.node_type === 'house' || d.target.node_type === 'house') baseWidth = 1.2
         else baseWidth = 2.5
-        // █ Physics: thicker = more MW flowing through this cable
-        const flowBoost = Math.abs(d.flow || 0) * 1.5
-        return Math.min(Math.max(baseWidth, 1.5 + flowBoost), 10)
+        // STEP 9: Physics-driven thickness — thicker = more MW
+        const flowBoost = Math.abs(d.flow || 0) * 1.2
+        return Math.min(Math.max(baseWidth, 1.5 + flowBoost), 8)
       })
       .style('stroke-dasharray', d => {
         if (d.status === 'broken') return '10 5'
@@ -564,11 +582,15 @@ export default function GridGraph({
       })
       .on('drag', function(event, d) {
         if (currentMode !== MODES.SELECT) return
-        d.x = event.x
-        d.y = event.y
+        const t = d3.zoomTransform(svgRef.current)
+        // ✅ CORRECT CALC: Invert mouse pos to get world-space pos
+        d.x = t.invertX(event.sourceEvent.clientX - svgRef.current.getBoundingClientRect().left)
+        d.y = t.invertY(event.sourceEvent.clientY - svgRef.current.getBoundingClientRect().top)
+        
         d3.select(this).attr('transform', `translate(${d.x},${d.y})`)
-        root.selectAll('path.wire').filter(l => l.source.id === d.id || l.target.id === d.id)
-          .attr('d', l => `M${l.source.x},${l.source.y} L${l.target.x},${l.target.y}`)
+        root.selectAll('path.wire')
+            .filter(l => l.source.id === d.id || l.target.id === d.id)
+            .attr('d', l => `M${l.source.x},${l.source.y} L${l.target.x},${l.target.y}`)
       })
       .on('end', async (event, d) => {
         const dx = Math.abs(event.x - dragStart[0]);
@@ -831,7 +853,7 @@ export default function GridGraph({
     hospitalGroup.exit().remove()
 
     nodeSel.exit().remove()
-  }, [gridState, aiState, currentMode, selectedNode, selectedEdge, interactionState, showFlow])
+  }, [gridState, aiState, currentMode, selectedNode, selectedEdge, interactionState])
 
   const svgCursor = {
     [MODES.CONNECT]:   'crosshair',
@@ -847,16 +869,16 @@ export default function GridGraph({
     flowing:   { color: '#33ff33', icon: '⚡', text: 'FLOWING' },
     stopped:   { color: '#ff3333', icon: '⏹', text: 'STOPPED' },
     rerouting: { color: '#ffaa00', icon: '↻', text: 'REROUTING' },
-    'no-flow': { color: '#aaaaaa', icon: '○', text: 'NO FLOW' },
+    INITIALIZING: { color: '#aaaaaa', icon: '○', text: 'INITIALIZING' },
   }
-  const status = flowStatusConfig[flowStatus] || flowStatusConfig['no-flow']
+  const status = flowStatusConfig[flowStatus] || flowStatusConfig['INITIALIZING']
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
       <svg
         ref={svgRef}
         width="100%" height="100%"
-        style={{ display: 'block', cursor: svgCursor, position: 'absolute', zIndex: 10 }}
+        style={{ display: 'block', cursor: svgCursor, position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 10 }}
         onContextMenu={e => e.preventDefault()}
       />
       <canvas

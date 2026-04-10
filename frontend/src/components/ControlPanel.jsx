@@ -79,23 +79,7 @@ export default function ControlPanel({ gridState, onUpdate, onMessage, selectedN
             📈 Increase Demand
           </button>
 
-          <button
-            className="btn btn-red"
-            disabled={loading || gridState?.storm_active}
-            onClick={() => call(() => triggerEvent('storm'), 'Storm')}
-          >
-            🌩️ Trigger Storm
-          </button>
 
-          {gridState?.storm_active && (
-            <button
-              className="btn btn-cyan"
-              disabled={loading}
-              onClick={() => call(() => triggerEvent('clear_storm'), 'Clear Storm')}
-            >
-              ☀️ Clear Storm
-            </button>
-          )}
 
           <button
             className="btn btn-green"
@@ -141,27 +125,24 @@ export default function ControlPanel({ gridState, onUpdate, onMessage, selectedN
       {selectedNodeData && (
         <div className="glass-card" style={{ padding: '12px 16px', background: 'rgba(100,180,255,0.08)', border: '1px solid rgba(100,180,255,0.2)' }}>
           <div className="section-title">⚙️ Node Actions</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {(() => {
-              function handleNodeAction(node) {
-                if (node.failed) {
-                   call(() => restoreNodeAPI(node.id), `Restore ${node.id}`);
-                } else {
-                   call(() => failNodeAPI(node.id), `Fail ${node.id}`);
-                }
+
+          <button
+            className={`btn ${selectedNodeData.failed ? 'btn-cyan' : 'btn-red'}`}
+            disabled={loading}
+            onClick={async () => {
+              if (selectedNodeData.failed) {
+                await call(() => restoreNodeAPI(selectedNode), `Restore ${selectedNode}`);
+              } else {
+                await call(() => failNodeAPI(selectedNode), `Fail ${selectedNode}`);
               }
 
-              return (
-                 <button
-                   className={`btn ${selectedNodeData.failed ? 'btn-cyan' : 'btn-red'}`}
-                   disabled={loading}
-                   onClick={() => handleNodeAction(selectedNodeData)}
-                 >
-                   {selectedNodeData.failed ? '🔧 Restore Node' : '⚠️ Fail Node'}
-                 </button>
-              );
-            })()}
-          </div>
+              // 🔥 FORCE REAL UPDATE
+              const sim = await simulate();
+              onUpdate(sim.grid);
+            }}
+          >
+            {selectedNodeData.failed ? '🔧 Restore Node' : '⚠️ Fail Node'}
+          </button>
         </div>
       )}
 

@@ -14,16 +14,8 @@ export default function Toolbar({
   currentMode, setCurrentMode,
   addNodeType, setAddNodeType,
   running, setRunning,
-  showFlow, setShowFlow,
-  faultSimMode, setFaultSimMode,
-  aiAssistMode, setAiAssistMode,
   onReset, loading
 }) {
-  
-  const getBtnClass = (mode, colorClass) => {
-    return `btn ${currentMode === mode ? colorClass : 'btn-cyan'}`
-  }
-
   const activeStyle = (mode) => currentMode === mode ? { filter: 'brightness(1.5)', outline: '2px solid rgba(255,255,255,0.8)' } : { opacity: 0.7 }
 
   return (
@@ -31,16 +23,16 @@ export default function Toolbar({
       <div style={{ fontWeight: 600, color: 'var(--text-secondary)', fontSize: 13, letterSpacing: '1px', textTransform: 'uppercase' }}>
         CAD Mode:
       </div>
-      
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <button className="btn btn-cyan" style={activeStyle(MODES.ADD_NODE)} onClick={() => setCurrentMode(MODES.ADD_NODE)}>
           ➕ Add Node
         </button>
-        <select 
-          value={addNodeType} 
+        <select
+          value={addNodeType}
           onChange={e => setAddNodeType(e.target.value)}
-          style={{ 
-            background: 'var(--bg-deep)', color: 'var(--text-primary)', 
+          style={{
+            background: 'var(--bg-deep)', color: 'var(--text-primary)',
             border: '1px solid var(--border)', borderRadius: 4, padding: '8px',
             opacity: currentMode === MODES.ADD_NODE ? 1 : 0.4
           }}

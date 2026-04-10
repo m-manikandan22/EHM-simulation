@@ -43,7 +43,7 @@ class ScadaControlCenter:
         """
         return {
             "rl_state":      grid.get_rl_state(),
-            "lstm_sequence": grid.get_lstm_input("S0"),
+            "lstm_sequence": grid.get_lstm_input("S_MAIN"),
             "nodes_data":    list(grid.nodes.values()),
             "raw_state":     grid.get_state(),
         }
@@ -91,9 +91,9 @@ class ScadaControlCenter:
             raw_state,
         )
 
-        # ── 4. Apply PREVIOUS cycle's queued action (simulating relay delay) ──
+        # ── 4. Apply CURRENT cycle's action ──────────────────────────────────
         raw_action_result = self._dispatch_control_signal(
-            self._pending_action, raw_state, grid, ems
+            decision["action_name"], raw_state, grid, ems
         )
 
         # Unpack FLISR dict vs plain string
@@ -104,8 +104,7 @@ class ScadaControlCenter:
             action_result = raw_action_result
             flisr_log     = []
 
-        # ── 5. Queue THIS cycle's action for next tick ────────────────────
-        self._pending_action   = decision["action_name"]
+        # ── 5. Record expectation ──────────────────────────────────────────
         self._expected_health  = min(1.0, actual_health + 0.05)   # optimistic estimate
 
         # ── 6. RL experience storage + training ──────────────────────────
